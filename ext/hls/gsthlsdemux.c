@@ -381,10 +381,16 @@ static gboolean
 gst_hls_demux_setup_streams (GstAdaptiveDemux * demux)
 {
   GstHLSDemux *hlsdemux = GST_HLS_DEMUX_CAST (demux);
+  GstAdaptiveDemuxStream *stream;
 
   /* only 1 output supported */
-  gst_adaptive_demux_stream_new (demux, gst_hls_demux_create_pad (hlsdemux));
-
+  stream =
+      gst_adaptive_demux_stream_new (demux,
+      gst_hls_demux_create_pad (hlsdemux));
+  GST_M3U8_CLIENT_LOCK (hlsdemux->client);
+  if (stream)
+    stream->currently_selected_rate = hlsdemux->client->current->bandwidth;
+  GST_M3U8_CLIENT_UNLOCK (hlsdemux->client);
   hlsdemux->reset_pts = TRUE;
 
   return TRUE;
@@ -423,6 +429,9 @@ gst_hls_demux_process_manifest (GstAdaptiveDemux * demux, GstBuffer * buf)
   if (gst_m3u8_client_has_variant_playlist (hlsdemux->client)) {
     GstM3U8 *child = NULL;
     GError *err = NULL;
+    GList *var_list;
+    GstM3U8 *m3u8;
+    GstStructure *var_info;
 
     if (demux->connection_speed == 0) {
       GST_M3U8_CLIENT_LOCK (hlsdemux->client);
@@ -444,6 +453,26 @@ gst_hls_demux_process_manifest (GstAdaptiveDemux * demux, GstBuffer * buf)
           err);
       return FALSE;
     }
+
+    GST_M3U8_CLIENT_LOCK (hlsdemux->client);
+    var_list = g_list_first (hlsdemux->client->main->current_variant);
+    for (var_list = g_list_first (var_list); var_list;
+        var_list = g_list_next (var_list)) {
+      m3u8 = GST_M3U8 (var_list->data);
+      var_info =
+          gst_structure_new (GST_ADAPTIVE_DEMUX_REPRESENTATION_MESSAGE_NAME,
+          "id", G_TYPE_STRING, m3u8->name, "uri", G_TYPE_STRING, m3u8->uri,
+          "targetduration", GST_TYPE_CLOCK_TIME, m3u8->targetduration,
+          "bandwidth", G_TYPE_UINT, m3u8->bandwidth, "codecs", G_TYPE_STRING,
+          m3u8->codecs, NULL);
+      if (m3u8->width > 0 && m3u8->height > 0) {
+        gst_structure_set (var_info, "width", G_TYPE_UINT, (guint) m3u8->width,
+            "height", G_TYPE_UINT, (guint) m3u8->height, NULL);
+      }
+      gst_element_post_message (GST_ELEMENT_CAST (hlsdemux),
+          gst_message_new_element (GST_OBJECT_CAST (hlsdemux), var_info));
+    }
+    GST_M3U8_CLIENT_UNLOCK (hlsdemux->client);
   }
 
   return gst_hls_demux_setup_streams (demux);
