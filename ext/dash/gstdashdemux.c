@@ -575,6 +575,10 @@ gst_dash_demux_setup_all_streams (GstDashDemux * demux)
     GstPad *srcpad;
     gchar *lang = NULL;
     GstTagList *tags = NULL;
+    GList *rep_list;
+    GstRepresentationNode *rep;
+    gchar *pad_name;
+    GstStructure *rep_info;
 
     active_stream = gst_mpdparser_get_active_stream_by_index (demux->client, i);
     if (active_stream == NULL)
@@ -622,6 +626,9 @@ gst_dash_demux_setup_all_streams (GstDashDemux * demux)
           (stream), tags);
     stream->index = i;
     stream->pending_seek_ts = GST_CLOCK_TIME_NONE;
+    if (active_stream->cur_representation)
+      GST_ADAPTIVE_DEMUX_STREAM_CAST (stream)->currently_selected_rate =
+          active_stream->cur_representation->bandwidth;
     if (active_stream->cur_adapt_set &&
         active_stream->cur_adapt_set->RepresentationBase &&
         active_stream->cur_adapt_set->RepresentationBase->ContentProtection) {
@@ -629,6 +636,31 @@ gst_dash_demux_setup_all_streams (GstDashDemux * demux)
       g_list_foreach (active_stream->cur_adapt_set->RepresentationBase->
           ContentProtection, gst_dash_demux_send_content_protection_event,
           stream);
+    }
+    if (active_stream->cur_adapt_set) {
+      pad_name = gst_pad_get_name (srcpad);
+      rep_list = active_stream->cur_adapt_set->Representations;
+      for (rep_list = g_list_first (rep_list); rep_list;
+          rep_list = g_list_next (rep_list)) {
+        rep = (GstRepresentationNode *) rep_list->data;
+        rep_info =
+            gst_structure_new (GST_ADAPTIVE_DEMUX_REPRESENTATION_MESSAGE_NAME,
+            "id", G_TYPE_STRING, rep->id, "pad", G_TYPE_STRING, pad_name,
+            "bandwidth", G_TYPE_UINT, rep->bandwidth, "codecs", G_TYPE_STRING,
+            rep->RepresentationBase->codecs, NULL);
+        if (rep->RepresentationBase->mimeType) {
+          gst_structure_set (rep_info, "mimeType", G_TYPE_STRING,
+              rep->RepresentationBase->mimeType, NULL);
+        }
+        if (rep->RepresentationBase->width && rep->RepresentationBase->height) {
+          gst_structure_set (rep_info, "height", G_TYPE_UINT,
+              rep->RepresentationBase->height, "width", G_TYPE_UINT,
+              rep->RepresentationBase->width, NULL);
+        }
+        gst_element_post_message (GST_ELEMENT_CAST (demux),
+            gst_message_new_element (GST_OBJECT_CAST (demux), rep_info));
+      }
+      g_free (pad_name);
     }
 
     gst_isoff_sidx_parser_init (&stream->sidx_parser);
