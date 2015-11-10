@@ -941,33 +941,7 @@ retry:
     return FALSE;
   }
 
-  /* If it's a live source, do not let the sequence number go beyond
-   * three fragments before the end of the list */
-  if (update == FALSE && demux->client->current &&
-      gst_m3u8_client_is_live (demux->client)) {
-    gint64 last_sequence, first_sequence;
-
-    GST_M3U8_CLIENT_LOCK (demux->client);
-    last_sequence =
-        GST_M3U8_MEDIA_FILE (g_list_last (demux->client->current->
-            files)->data)->sequence;
-    first_sequence =
-        GST_M3U8_MEDIA_FILE (demux->client->current->files->data)->sequence;
-
-    GST_DEBUG_OBJECT (demux,
-        "sequence:%" G_GINT64_FORMAT " , first_sequence:%" G_GINT64_FORMAT
-        " , last_sequence:%" G_GINT64_FORMAT, demux->client->sequence,
-        first_sequence, last_sequence);
-    if (demux->client->sequence >= last_sequence - 3) {
-      //demux->need_segment = TRUE;
-      /* Make sure we never go below the minimum sequence number */
-      demux->client->sequence = MAX (first_sequence, last_sequence - 3);
-      GST_DEBUG_OBJECT (demux,
-          "Sequence is beyond playlist. Moving back to %" G_GINT64_FORMAT,
-          demux->client->sequence);
-    }
-    GST_M3U8_CLIENT_UNLOCK (demux->client);
-  } else if (demux->client->current && !gst_m3u8_client_is_live (demux->client)) {
+  if (demux->client->current && !gst_m3u8_client_is_live (demux->client)) {
     GstClockTime current_pos, target_pos;
     guint sequence = 0;
     GList *walk;
