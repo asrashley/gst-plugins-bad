@@ -384,10 +384,16 @@ static gboolean
 gst_hls_demux_setup_streams (GstAdaptiveDemux * demux)
 {
   GstHLSDemux *hlsdemux = GST_HLS_DEMUX_CAST (demux);
+  GstAdaptiveDemuxStream *stream;
 
   /* only 1 output supported */
-  gst_adaptive_demux_stream_new (demux, gst_hls_demux_create_pad (hlsdemux));
-
+  stream =
+      gst_adaptive_demux_stream_new (demux,
+      gst_hls_demux_create_pad (hlsdemux));
+  GST_M3U8_CLIENT_LOCK (hlsdemux->client);
+  if (stream)
+    stream->currently_selected_rate = hlsdemux->client->current->bandwidth;
+  GST_M3U8_CLIENT_UNLOCK (hlsdemux->client);
   hlsdemux->reset_pts = TRUE;
 
   return TRUE;
