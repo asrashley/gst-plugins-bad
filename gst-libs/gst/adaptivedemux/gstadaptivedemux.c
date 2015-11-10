@@ -157,6 +157,12 @@ enum
   PROP_LAST
 };
 
+enum
+{
+  SIGNAL_SELECT_BITRATE,
+  LAST_SIGNAL
+};
+
 enum GstAdaptiveDemuxFlowReturn
 {
   GST_ADAPTIVE_DEMUX_FLOW_SWITCH = GST_FLOW_CUSTOM_SUCCESS_2 + 1
@@ -210,6 +216,8 @@ typedef struct _GstAdaptiveDemuxTimer
 } GstAdaptiveDemuxTimer;
 
 static GstBinClass *parent_class = NULL;
+static guint gst_adaptive_demux_signals[LAST_SIGNAL] = { 0 };
+
 static void gst_adaptive_demux_class_init (GstAdaptiveDemuxClass * klass);
 static void gst_adaptive_demux_init (GstAdaptiveDemux * dec,
     GstAdaptiveDemuxClass * klass);
@@ -276,6 +284,13 @@ gst_adaptive_demux_stream_data_received_default (GstAdaptiveDemux * demux,
 static GstFlowReturn
 gst_adaptive_demux_stream_finish_fragment_default (GstAdaptiveDemux * demux,
     GstAdaptiveDemuxStream * stream);
+static gboolean
+gst_adaptive_demux_select_bitrate_accumulator (GSignalInvocationHint * ihint,
+    GValue * return_accu, const GValue * handler_return, gpointer dummy);
+static guint64
+gst_adaptive_demux_signal_select_bitrate_default (GstElement * object,
+    guint64 currently_selected_bitrate,
+    guint64 download_bitrate, gpointer user_data);
 static GstFlowReturn
 gst_adaptive_demux_stream_advance_fragment_unlocked (GstAdaptiveDemux * demux,
     GstAdaptiveDemuxStream * stream, GstClockTime duration);
@@ -385,6 +400,14 @@ gst_adaptive_demux_class_init (GstAdaptiveDemuxClass * klass)
   gobject_class->get_property = gst_adaptive_demux_get_property;
   gobject_class->finalize = gst_adaptive_demux_finalize;
 
+  gst_adaptive_demux_signals[SIGNAL_SELECT_BITRATE] =
+      g_signal_new ("select-bitrate", G_TYPE_FROM_CLASS (klass),
+      G_SIGNAL_RUN_LAST, G_STRUCT_OFFSET (GstAdaptiveDemuxClass,
+          signal_select_bitrate),
+      gst_adaptive_demux_select_bitrate_accumulator, NULL,
+      g_cclosure_marshal_generic, G_TYPE_UINT64, 2, G_TYPE_UINT64,
+      G_TYPE_UINT64);
+
   g_object_class_install_property (gobject_class, PROP_CONNECTION_SPEED,
       g_param_spec_uint ("connection-speed", "Connection Speed",
           "Network connection speed in kbps (0 = calculate from downloaded"
@@ -406,6 +429,8 @@ gst_adaptive_demux_class_init (GstAdaptiveDemuxClass * klass)
   klass->data_received = gst_adaptive_demux_stream_data_received_default;
   klass->finish_fragment = gst_adaptive_demux_stream_finish_fragment_default;
   klass->update_manifest = gst_adaptive_demux_update_manifest_default;
+  klass->signal_select_bitrate =
+      gst_adaptive_demux_signal_select_bitrate_default;
 }
 
 static void
@@ -3221,6 +3246,32 @@ gst_adaptive_demux_stream_advance_fragment (GstAdaptiveDemux * demux,
   return ret;
 }
 
+static gboolean
+gst_adaptive_demux_select_bitrate_accumulator (GSignalInvocationHint * ihint,
+    GValue * return_accu, const GValue * handler_return, gpointer dummy)
+{
+  guint64 mybitrate;
+  guint64 retbitrate;
+
+  mybitrate = g_value_get_uint64 (handler_return);
+  retbitrate = g_value_get_uint64 (return_accu);
+  if (!(ihint->run_type & G_SIGNAL_RUN_CLEANUP)) {
+    if (mybitrate && retbitrate)
+      g_value_set_uint64 (return_accu, MIN (mybitrate, retbitrate));
+    else
+      g_value_set_uint64 (return_accu, mybitrate == 0 ? retbitrate : mybitrate);
+  }
+  return TRUE;
+}
+
+static guint64
+gst_adaptive_demux_signal_select_bitrate_default (GstElement * object,
+    guint64 currently_selected_bitrate,
+    guint64 download_bitrate, gpointer user_data)
+{
+  return 0;
+}
+
 /* must be called with manifest_lock taken */
 GstFlowReturn
 gst_adaptive_demux_stream_advance_fragment_unlocked (GstAdaptiveDemux * demux,
@@ -3278,8 +3329,21 @@ gst_adaptive_demux_stream_advance_fragment_unlocked (GstAdaptiveDemux * demux,
       GST_TIME_AS_USECONDS (gst_adaptive_demux_get_monotonic_time (demux));
 
   if (ret == GST_FLOW_OK) {
-    if (gst_adaptive_demux_stream_select_bitrate (demux, stream,
-            gst_adaptive_demux_stream_update_current_bitrate (demux, stream))) {
+    guint64 bitrate;
+    guint64 sig_bitrate = 0;
+
+    bitrate = gst_adaptive_demux_stream_update_current_bitrate (demux, stream);
+    g_signal_emit (G_OBJECT (demux),
+        gst_adaptive_demux_signals[SIGNAL_SELECT_BITRATE], 0,
+        stream->currently_selected_rate, bitrate, &sig_bitrate);
+    GST_DEBUG_OBJECT (demux,
+        "Currently using bitrate %" G_GUINT64_FORMAT ", measured bitrate %"
+        G_GUINT64_FORMAT ", signal handler selected %" G_GUINT64_FORMAT,
+        stream->currently_selected_rate, bitrate, sig_bitrate);
+    if (sig_bitrate != 0)
+      bitrate = sig_bitrate;
+    if (bitrate && bitrate != stream->currently_selected_rate
+        && gst_adaptive_demux_stream_select_bitrate (demux, stream, bitrate)) {
       stream->need_header = TRUE;
       gst_adapter_clear (stream->adapter);
       ret = (GstFlowReturn) GST_ADAPTIVE_DEMUX_FLOW_SWITCH;
