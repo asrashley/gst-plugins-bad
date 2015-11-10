@@ -72,6 +72,22 @@ G_BEGIN_DECLS
  */
 #define GST_ADAPTIVE_DEMUX_STATISTICS_MESSAGE_NAME "adaptive-streaming-statistics"
 
+/**
+ * GST_ADAPTIVE_DEMUX_REPRESENTATION_MESSAGE_NAME:
+ *
+ * Name of the ELEMENT type messages posted by demux elements with information about
+ * a representation. Streams that support bitrate adaptation will have multiple
+ * represntations, one for each bitrate, possibly one for each audio/video/subtitle
+ * component. One message will be posted per available representation. The
+ * exact format of the message depends upon the adaptive bitrate technology.
+ * The #GstStructure in each message will have at least two fields -
+ *  "id"        #G_TYPE_STRING
+ *  "bandwidth" #G_TYPE_UINT
+ *
+ * Since: 1.7
+ */
+#define GST_ADAPTIVE_DEMUX_REPRESENTATION_MESSAGE_NAME "adaptive-streaming-representation"
+
 #define GST_ELEMENT_ERROR_FROM_ERROR(el, msg, err) G_STMT_START { \
   gchar *__dbg = g_strdup_printf ("%s: %s", msg, err->message);         \
   GST_WARNING_OBJECT (el, "error: %s", __dbg);                          \
@@ -158,7 +174,8 @@ struct _GstAdaptiveDemuxStream
   gint64 download_chunk_start_time;
   gint64 download_total_time;
   gint64 download_total_bytes;
-  guint64 current_download_rate;
+  guint64 current_download_rate; /* average of current download rate */
+  guint64 currently_selected_rate; /* bitrate of currently selected representation */
 
   GstAdaptiveDemuxStreamFragment fragment;
 
@@ -424,6 +441,22 @@ struct _GstAdaptiveDemuxClass
    * selected period.
    */
   GstClockTime (*get_period_start_time) (GstAdaptiveDemux *demux);
+
+  /**
+   * signal_select_bitrate: a hook to control adaptive bitrate control
+   * @demux: #GstAdaptiveDemux
+   * @currently_selected_bitrate: The bitrate of the currently selected representation
+   * @download_bitrate: The estimate of the current achieved download rate
+   * Returns: the bitrate that should be used. Normally this will be
+   * download_bitrate. If currently_selected_bitrate is returned, the
+   * element that extends from #GstAdaptiveDemux should not change from its
+   * currently selected bitrate.
+   *
+   * Signal that apps can connect to if they wish to control the
+   * adaptive bitrate control in #GstAdaptiveDemux.
+   * Since: 1.7
+   */
+  guint64      (*signal_select_bitrate) (GstElement * demux, guint64 currently_selected_bitrate, guint64 download_bitrate, gpointer user_data);
 };
 
 GType    gst_adaptive_demux_get_type (void);
