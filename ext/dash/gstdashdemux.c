@@ -638,8 +638,10 @@ gst_dash_demux_send_content_protection_event (gpointer data, gpointer userdata)
     return;
 
   GST_TRACE_OBJECT (stream, "check schemeIdUri %s", cp->schemeIdUri);
-  /* RFC 2141 states: The leading "urn:" sequence is case-insensitive */
+
+  /* RFC 2141 states: The leading "urn:" and the Namespace Identifier are case-insensitive */
   schemeIdUri = g_ascii_strdown (cp->schemeIdUri, -1);
+  schemeIdUri = g_strstrip (schemeIdUri);
   if (g_str_has_prefix (schemeIdUri, "urn:uuid:")) {
     pssi_len = strlen (cp->value);
     pssi = gst_buffer_new_wrapped (g_memdup (cp->value, pssi_len), pssi_len);
@@ -647,7 +649,7 @@ gst_dash_demux_send_content_protection_event (gpointer data, gpointer userdata)
     /* RFC 4122 states that the hex part of a UUID is in lower case,
      * but some streams seem to ignore this and use upper case for the
      * protection system ID */
-    event = gst_event_new_protection (cp->schemeIdUri + 9, pssi, "dash/mpd");
+    event = gst_event_new_protection (schemeIdUri + 9, pssi, "dash/mpd");
     gst_adaptive_demux_stream_queue_event ((GstAdaptiveDemuxStream *) stream,
         event);
     gst_buffer_unref (pssi);
