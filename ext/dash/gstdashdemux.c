@@ -1317,6 +1317,8 @@ gst_dash_demux_stream_select_bitrate (GstAdaptiveDemuxStream * stream,
           active_stream->cur_representation->bandwidth);
       caps = gst_dash_demux_get_input_caps (demux, active_stream);
       gst_adaptive_demux_stream_set_caps (stream, caps);
+      stream->currently_selected_rate =
+          active_stream->cur_representation->bandwidth;
       ret = TRUE;
 
     } else {
