@@ -197,6 +197,39 @@ gst_hlsdemux_test_src_start (GstTestHTTPSrc * src,
   return FALSE;
 }
 
+static gboolean
+gst_hlsdemux_test_download_once_src_start (GstTestHTTPSrc * src,
+    const gchar * uri, GstTestHTTPSrcInput * input_data, gpointer user_data)
+{
+  const GstHlsDemuxTestCase *test_case =
+      (const GstHlsDemuxTestCase *) user_data;
+  guint64 once_mask = 0;
+  guint64 always_mask = 0;
+
+  gst_structure_get (test_case->state, "download-once",
+      GST_TYPE_BITMASK, &once_mask, NULL);
+  gst_structure_get (test_case->state, "download-always",
+      GST_TYPE_BITMASK, &always_mask, NULL);
+  for (guint i = 0; test_case->input[i].uri; ++i) {
+    if (strcmp (test_case->input[i].uri, uri) == 0) {
+      guint64 bitpos = G_GUINT64_CONSTANT (1) << i;
+      if ((once_mask & bitpos) && !(always_mask & bitpos)) {
+        GST_DEBUG ("already used entry %d", i);
+        continue;
+      }
+      gst_hlsdemux_test_set_input_data (test_case, &test_case->input[i],
+          input_data);
+      GST_DEBUG ("open URI %d: %s", i, uri);
+      once_mask |= bitpos;
+      gst_structure_set (test_case->state, "download-once",
+          GST_TYPE_BITMASK, once_mask, NULL);
+      return TRUE;
+    }
+  }
+  return FALSE;
+}
+
+
 static GstFlowReturn
 gst_hlsdemux_test_src_create (GstTestHTTPSrc * src,
     guint64 offset,
@@ -700,6 +733,201 @@ GST_START_TEST (testFragmentDownloadError)
 
 GST_END_TEST;
 
+static guint64
+select_bitrate (GstElement * object, guint64 currently_selected_bitrate,
+    guint64 bitrate, gpointer user_data)
+{
+  GstHlsDemuxTestSelectBitrateContext *context =
+      (GstHlsDemuxTestSelectBitrateContext *) user_data;
+
+  fail_unless (context != NULL);
+  fail_unless (context->testData != NULL);
+  context->select_count++;
+  GST_DEBUG ("select_bitrate %" G_GUINT64_FORMAT " count=%d", bitrate,
+      context->select_count);
+  if (context->select_count < 2) {
+    return 900000;
+  }
+  return 2000000;
+}
+
+static void
+connect_abr_signals (GstAdaptiveDemuxTestEngine * engine, gpointer user_data)
+{
+  GstHlsDemuxTestSelectBitrateContext *context;
+  GstAdaptiveDemuxTestCase *testData = (GstAdaptiveDemuxTestCase *) user_data;
+
+  context = g_slice_new0 (GstHlsDemuxTestSelectBitrateContext);
+  context->engine = engine;
+  context->testData = (GstAdaptiveDemuxTestCase *) user_data;
+  testData->signal_context = context;
+  context->signal_handle = g_signal_connect (G_OBJECT (engine->demux),
+      "select-bitrate", G_CALLBACK (select_bitrate), context);
+}
+
+static gboolean
+check_data_received_and_finish (GstAdaptiveDemuxTestEngine *
+    engine, GstAdaptiveDemuxTestOutputStream * stream,
+    GstBuffer * buffer, gpointer user_data)
+{
+  GstAdaptiveDemuxTestCase *testData = (GstAdaptiveDemuxTestCase *) user_data;
+  GstAdaptiveDemuxTestExpectedOutput *testOutputData;
+  guint64 streamOffset;
+  guint index = 0;
+
+  if (!gst_adaptive_demux_test_check_received_data (engine,
+          stream, buffer, user_data)) {
+    return FALSE;
+  }
+
+  testOutputData =
+      gst_adaptive_demux_test_find_test_data_by_stream (testData, stream,
+      &index);
+  streamOffset =
+      stream->segment_start + stream->segment_received_size +
+      gst_buffer_get_size (buffer) + stream->total_received_size;
+  GST_DEBUG ("Had %d streams and %" G_GUINT64_FORMAT " bytes, expecting %"
+      G_GUINT64_FORMAT " bytes", index + 1, streamOffset,
+      testOutputData->expected_size);
+  if (index == (g_list_length (testData->output_streams) - 1)
+      && streamOffset >= testOutputData->expected_size) {
+    GST_DEBUG
+        ("stopping main loop now that %" G_GUINT64_FORMAT
+        " bytes have been recevied from %s", streamOffset,
+        testOutputData->name);
+    g_main_loop_quit (engine->loop);
+  }
+  return TRUE;
+}
+
+/* 
+At startup of a live HLS stream, gst_m3u8_client_update will select a
+starting position 3 fragments from the end of the file. If hlsdemux
+performs a bitrate switch, make sure that it does re-enforce the rule
+about starting 3 fragments from the end, as this would cause it to
+download the wrong fragment.
+
+For example, consider the case of two bitrates containing 6 fragments:
+     800  0  1  2  3  4  5
+    1500  0  1  2  3  4  5
+
+At startup, the 800KBps stream is selected and fragment 3 is selected as
+the start position. After downloading 3 and 4, hlsdemux switches to the
+1500KBps stream. At this point it must not enforce the "3 fragments from
+the end" rule, as that would cause it to download fragment 3 again (at
+the new bitrate).
+*/
+GST_START_TEST (testLiveBitrateSwitching)
+{
+  const guint segment_size = 20 * 188;
+  const gchar *master_playlist =
+      "#EXTM3U\n"
+      "#EXT-X-VERSION:4\n"
+      "#EXT-X-TARGETDURATION:1\n"
+      "#EXT-X-STREAM-INF:PROGRAM-ID=1, BANDWIDTH=800000, CODECS=\"avc1.42001f mp4a.40.2\", RESOLUTION=320x176\n"
+      "800/index.m3u8\n"
+      "#EXT-X-STREAM-INF:PROGRAM-ID=1, BANDWIDTH=1500000, CODECS=\"avc1.42001f mp4a.40.2\", RESOLUTION=1024x576\n"
+      "1500/index.m3u8\n";
+  const gchar *media_playlist =
+      "#EXTM3U \n"
+      "#EXT-X-VERSION:4\n"
+      "#EXT-X-TARGETDURATION:1\n"
+      "#EXT-X-MEDIA-SEQUENCE:1\n"
+      "#EXTINF:1,Test\n" "001.ts\n"
+      "#EXTINF:1,Test\n" "002.ts\n"
+      "#EXTINF:1,Test\n" "003.ts\n"
+      "#EXTINF:1,Test\n" "004.ts\n" "#EXTINF:1,Test\n" "005.ts\n";
+  const gchar *complete_media_playlist =
+      "#EXTM3U \n"
+      "#EXT-X-VERSION:4\n"
+      "#EXT-X-TARGETDURATION:1\n"
+      "#EXT-X-MEDIA-SEQUENCE:2\n"
+      "#EXTINF:1,Test\n" "002.ts\n"
+      "#EXTINF:1,Test\n" "003.ts\n"
+      "#EXTINF:1,Test\n" "004.ts\n"
+      "#EXTINF:1,Test\n" "005.ts\n" "#EXTINF:1,Test\n" "006.ts\n"
+      "#EXTINF:1,Test\n" "007.ts\n";
+  GstHlsDemuxTestInputData inputTestData[] = {
+    {"http://unit.test/master.m3u8", (guint8 *) master_playlist, 0},
+    {"http://unit.test/800/index.m3u8", (guint8 *) media_playlist, 0},
+    {"http://unit.test/1500/index.m3u8", (guint8 *) media_playlist, 0},
+    {"http://unit.test/1500/index.m3u8", (guint8 *) complete_media_playlist, 0},
+    {"http://unit.test/800/001.ts", NULL, segment_size},
+    {"http://unit.test/800/002.ts", NULL, segment_size},
+    {"http://unit.test/800/003.ts", NULL, segment_size},
+    {"http://unit.test/800/004.ts", NULL, segment_size},
+    {"http://unit.test/800/005.ts", NULL, segment_size},
+    {"http://unit.test/1500/001.ts", NULL, segment_size},
+    {"http://unit.test/1500/002.ts", NULL, segment_size},
+    {"http://unit.test/1500/003.ts", NULL, segment_size},
+    {"http://unit.test/1500/004.ts", NULL, segment_size},
+    {"http://unit.test/1500/005.ts", NULL, segment_size},
+    {"http://unit.test/1500/006.ts", NULL, segment_size},
+    {NULL, NULL, 0}
+  };
+  GstAdaptiveDemuxTestExpectedOutput outputTestData[] = {
+    {"src_0", 2 * segment_size, NULL},
+    {"src_1", 2 * segment_size, NULL},
+    {NULL, 0, NULL}
+  };
+  const gchar *expected_url[] = {
+    "http://unit.test/800/003.ts",
+    "http://unit.test/800/004.ts",
+    "http://unit.test/1500/005.ts",
+    "http://unit.test/1500/006.ts",
+    NULL
+  };
+  const GValue *requests;
+  const GValue *uri;
+  const guint64 download_always_mask = 0x0B;
+  TESTCASE_INIT_BOILERPLATE (segment_size);
+
+  gst_structure_set (hlsTestCase.state,
+      "download-always", GST_TYPE_BITMASK, download_always_mask, NULL);
+  http_src_callbacks.src_start = gst_hlsdemux_test_download_once_src_start;
+  http_src_callbacks.src_create = gst_hlsdemux_test_src_create;
+  engine_callbacks.pre_test = connect_abr_signals;
+  engine_callbacks.appsink_received_data = check_data_received_and_finish;
+
+  gst_test_http_src_install_callbacks (&http_src_callbacks, &hlsTestCase);
+  gst_adaptive_demux_test_run (DEMUX_ELEMENT_NAME,
+      inputTestData[0].uri, &engine_callbacks, engineTestData);
+
+  requests = gst_structure_get_value (hlsTestCase.state, "requests");
+  fail_unless (requests != NULL);
+  /* hlsdemux should have requested:
+     master playlist,
+     low bitrate playlist
+     003.ts
+     004.ts
+     high bitrate playlist
+     005.ts
+     (maybe) high bitrate playlist
+     006.ts
+   */
+  fail_unless (gst_value_array_get_size (requests) >= 8);
+  /* master playlist */
+  uri = gst_value_array_get_value (requests, 0);
+  assert_equals_string (inputTestData[0].uri, g_value_get_string (uri));
+  /* low bitrate playlist */
+  uri = gst_value_array_get_value (requests, 1);
+  assert_equals_string (inputTestData[1].uri, g_value_get_string (uri));
+  for (guint pos = 2, i = 0;
+      expected_url[i] && pos < gst_value_array_get_size (requests); ++pos) {
+    const gchar *requested_url;
+    uri = gst_value_array_get_value (requests, pos);
+    requested_url = g_value_get_string (uri);
+    if (g_str_has_suffix (requested_url, ".m3u8")) {
+      continue;
+    }
+    assert_equals_string (requested_url, expected_url[i]);
+    ++i;
+  }
+  TESTCASE_UNREF_BOILERPLATE;
+}
+
+GST_END_TEST;
+
 static Suite *
 hls_demux_suite (void)
 {
@@ -718,6 +946,7 @@ hls_demux_suite (void)
   tcase_add_test (tc_basicTest, testSeekSnapAfterPosition);
   tcase_add_test (tc_basicTest, testReverseSeekSnapBeforePosition);
   tcase_add_test (tc_basicTest, testReverseSeekSnapAfterPosition);
+  tcase_add_test (tc_basicTest, testLiveBitrateSwitching);
 
   tcase_add_unchecked_fixture (tc_basicTest, gst_adaptive_demux_test_setup,
       gst_adaptive_demux_test_teardown);
