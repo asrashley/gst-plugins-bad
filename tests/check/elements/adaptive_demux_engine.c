@@ -29,10 +29,6 @@ typedef struct _GstAdaptiveDemuxTestEnginePrivate
 } GstAdaptiveDemuxTestEnginePrivate;
 
 
-#define GST_TEST_GET_LOCK(d)  (&(((GstAdaptiveDemuxTestEnginePrivate*)(d))->engine.lock))
-#define GST_TEST_LOCK(d)      g_mutex_lock (GST_TEST_GET_LOCK (d))
-#define GST_TEST_UNLOCK(d)    g_mutex_unlock (GST_TEST_GET_LOCK (d))
-
 static void
 adaptive_demux_engine_stream_state_finalize (gpointer data)
 {
@@ -93,7 +89,7 @@ on_appSinkNewSample (GstAppSink * appsink, gpointer user_data)
   gboolean ret = TRUE;
 
   fail_unless (priv != NULL);
-  GST_TEST_LOCK (priv);
+  GST_TEST_LOCK (&priv->engine);
   engine = &priv->engine;
   testOutputStream = getTestOutputDataByAppsink (priv, appsink);
 
@@ -111,7 +107,7 @@ on_appSinkNewSample (GstAppSink * appsink, gpointer user_data)
 
   gst_sample_unref (sample);
 
-  GST_TEST_UNLOCK (priv);
+  GST_TEST_UNLOCK (&priv->engine);
 
   if (!ret)
     return GST_FLOW_EOS;
@@ -128,7 +124,7 @@ on_appSinkEOS (GstAppSink * appsink, gpointer user_data)
   GstAdaptiveDemuxTestOutputStream *testOutputStream = NULL;
 
   fail_unless (priv != NULL);
-  GST_TEST_LOCK (priv);
+  GST_TEST_LOCK (&priv->engine);
   testOutputStream = getTestOutputDataByAppsink (priv, appsink);
 
   testOutputStream->total_received_size +=
@@ -139,7 +135,7 @@ on_appSinkEOS (GstAppSink * appsink, gpointer user_data)
     priv->callbacks->appsink_eos (&priv->engine,
         testOutputStream, priv->user_data);
 
-  GST_TEST_UNLOCK (priv);
+  GST_TEST_UNLOCK (&priv->engine);
 }
 
 static GstPadProbeReturn
@@ -154,7 +150,7 @@ on_appsink_event (GstPad * pad, GstPadProbeInfo * info, gpointer data)
   GST_DEBUG ("Received event %" GST_PTR_FORMAT " on pad %" GST_PTR_FORMAT,
       event, pad);
 
-  GST_TEST_LOCK (priv);
+  GST_TEST_LOCK (&priv->engine);
   if (priv->callbacks->appsink_event) {
     GstPad *stream_pad = gst_pad_get_peer (pad);
     fail_unless (stream_pad != NULL);
@@ -163,7 +159,7 @@ on_appsink_event (GstPad * pad, GstPadProbeInfo * info, gpointer data)
     priv->callbacks->appsink_event (&priv->engine, stream, event,
         priv->user_data);
   }
-  GST_TEST_UNLOCK (priv);
+  GST_TEST_UNLOCK (&priv->engine);
 
   return GST_PAD_PROBE_OK;
 }
@@ -180,13 +176,13 @@ on_demux_sent_data (GstPad * pad, GstPadProbeInfo * info, gpointer data)
 
   buffer = GST_PAD_PROBE_INFO_BUFFER (info);
 
-  GST_TEST_LOCK (priv);
+  GST_TEST_LOCK (&priv->engine);
   if (priv->callbacks->demux_sent_data) {
     stream = getTestOutputDataByPad (priv, pad, TRUE);
     (*priv->callbacks->demux_sent_data) (&priv->engine,
         stream, buffer, priv->user_data);
   }
-  GST_TEST_UNLOCK (priv);
+  GST_TEST_UNLOCK (&priv->engine);
 
   return GST_PAD_PROBE_OK;
 }
@@ -211,12 +207,12 @@ on_demuxReceivesEvent (GstPad * pad, GstPadProbeInfo * info, gpointer data)
      */
     gst_event_parse_segment (event, &segment);
 
-    GST_TEST_LOCK (priv);
+    GST_TEST_LOCK (&priv->engine);
     stream = getTestOutputDataByPad (priv, pad, TRUE);
     stream->total_received_size += stream->segment_received_size;
     stream->segment_received_size = 0;
     stream->segment_start = segment->start;
-    GST_TEST_UNLOCK (priv);
+    GST_TEST_UNLOCK (&priv->engine);
   }
 
   return GST_PAD_PROBE_OK;
@@ -312,9 +308,9 @@ on_demuxNewPad (GstElement * demux, GstPad * pad, gpointer user_data)
   stream->pad = gst_object_ref (pad);
 
 
-  GST_TEST_LOCK (priv);
+  GST_TEST_LOCK (&priv->engine);
   g_ptr_array_add (priv->engine.output_streams, stream);
-  GST_TEST_UNLOCK (priv);
+  GST_TEST_UNLOCK (&priv->engine);
 
   pipeline = GST_ELEMENT (gst_element_get_parent (demux));
   fail_unless (pipeline != NULL);
@@ -326,11 +322,11 @@ on_demuxNewPad (GstElement * demux, GstPad * pad, gpointer user_data)
   ret = gst_element_sync_state_with_parent (sink);
   fail_unless_equals_int (ret, TRUE);
 
-  GST_TEST_LOCK (priv);
+  GST_TEST_LOCK (&priv->engine);
   if (priv->callbacks->demux_pad_added) {
     priv->callbacks->demux_pad_added (&priv->engine, stream, priv->user_data);
   }
-  GST_TEST_UNLOCK (priv);
+  GST_TEST_UNLOCK (&priv->engine);
 }
 
 /* callback called when demux removes a src pad.
@@ -350,7 +346,7 @@ on_demuxPadRemoved (GstElement * demux, GstPad * pad, gpointer user_data)
 
   GST_DEBUG ("Pad removed: %" GST_PTR_FORMAT, pad);
 
-  GST_TEST_LOCK (priv);
+  GST_TEST_LOCK (&priv->engine);
   stream = getTestOutputDataByPad (priv, pad, TRUE);
   if (priv->callbacks->demux_pad_removed) {
     priv->callbacks->demux_pad_removed (&priv->engine, stream, priv->user_data);
@@ -366,7 +362,7 @@ on_demuxPadRemoved (GstElement * demux, GstPad * pad, gpointer user_data)
     GST_DEBUG ("Changing AppSink element to PAUSED");
     gst_element_set_state (appSink, GST_STATE_PAUSED);
   }
-  GST_TEST_UNLOCK (priv);
+  GST_TEST_UNLOCK (&priv->engine);
 }
 
 /* callback called when main_loop detects an error message
@@ -386,14 +382,14 @@ on_ErrorMessageOnBus (GstBus * bus, GstMessage * msg, gpointer user_data)
   g_error_free (err);
   g_free (dbg_info);
 
-  GST_TEST_LOCK (priv);
+  GST_TEST_LOCK (&priv->engine);
 
   fail_unless (priv->callbacks->bus_error_message,
       "unexpected error detected on bus");
 
   priv->callbacks->bus_error_message (&priv->engine, msg, priv->user_data);
 
-  GST_TEST_UNLOCK (priv);
+  GST_TEST_UNLOCK (&priv->engine);
 }
 
 static gboolean
@@ -440,7 +436,7 @@ gst_adaptive_demux_test_run (const gchar * element_name,
   fail_unless (priv->engine.pipeline != NULL);
   GST_DEBUG ("created pipeline %" GST_PTR_FORMAT, priv->engine.pipeline);
 
-  GST_TEST_LOCK (priv);
+  GST_TEST_LOCK (&priv->engine);
 
   /* register a callback to listen for error messages */
   bus = gst_pipeline_get_bus (GST_PIPELINE (priv->engine.pipeline));
@@ -476,7 +472,7 @@ gst_adaptive_demux_test_run (const gchar * element_name,
   if (callbacks->pre_test)
     (*callbacks->pre_test) (&priv->engine, priv->user_data);
 
-  GST_TEST_UNLOCK (priv);
+  GST_TEST_UNLOCK (&priv->engine);
 
   GST_DEBUG ("Starting pipeline");
   stateChange = gst_element_set_state (priv->engine.pipeline, GST_STATE_PAUSED);
