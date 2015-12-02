@@ -327,19 +327,19 @@ testSeekAdaptiveDemuxSendsData (GstAdaptiveDemuxTestEngine * engine,
     GST_DEBUG ("seek task started");
 
     if (seek_flags & GST_SEEK_FLAG_FLUSH) {
-      g_mutex_lock (&testData->test_task_state_lock);
-
-      GST_DEBUG ("waiting for seek task to change state on testsrc");
-
       /* wait for test_task to run, send a flush start event to AppSink
        * and change the testhttpsrc element state from PLAYING to PAUSED
        */
+      GST_TEST_UNLOCK (engine);
+      g_mutex_lock (&testData->test_task_state_lock);
+      GST_DEBUG ("waiting for seek task to change state on testsrc");
       while (testData->test_task_state ==
           TEST_TASK_STATE_WAITING_FOR_TESTSRC_STATE_CHANGE) {
         g_cond_wait (&testData->test_task_state_cond,
             &testData->test_task_state_lock);
       }
       g_mutex_unlock (&testData->test_task_state_lock);
+      GST_TEST_LOCK (engine);
       /* we can continue now, but this buffer will be rejected by AppSink
        * because it is in flushing mode
        */
