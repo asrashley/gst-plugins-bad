@@ -163,6 +163,10 @@ struct _GstAdaptiveDemuxTestEngine
   GMutex lock;
 };
 
+#define GST_TEST_GET_LOCK(d)  (&(((GstAdaptiveDemuxTestEngine*)(d))->lock))
+#define GST_TEST_LOCK(d)      g_mutex_lock (GST_TEST_GET_LOCK (d))
+#define GST_TEST_UNLOCK(d)    g_mutex_unlock (GST_TEST_GET_LOCK (d))
+
 /**
  * gst_adaptive_demux_test_run:
  * @element_name: The name of the demux element (e.g. "dashdemux")
