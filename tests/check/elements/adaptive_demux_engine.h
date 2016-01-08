@@ -42,6 +42,8 @@ typedef struct _GstAdaptiveDemuxTestOutputStream {
   guint64 segment_received_size;
   /* the total size received so far on this stream, excluding current segment */
   guint64 total_received_size;
+  /* the number of Protection Events sent */
+  guint64 countContentProtectionEvents;
 } GstAdaptiveDemuxTestOutputStream;
 
 /* GstAdaptiveDemuxTestCallbacks: contains various callbacks that can
@@ -134,6 +136,17 @@ typedef struct _GstAdaptiveDemuxTestCallbacks
   gboolean (*demux_sent_data) (GstAdaptiveDemuxTestEngine *engine,
       GstAdaptiveDemuxTestOutputStream * stream,
       GstBuffer * buffer, gpointer user_data);
+
+  /**
+   * demux_sent_event: called each time the demux sends event to AppSink
+   * @engine: #GstAdaptiveDemuxTestEngine
+   * @stream: #GstAdaptiveDemuxTestOutputStream
+   * @event: the #GstEvent that was sent by demux
+   * @user_data: the user_data passed to gst_adaptive_demux_test_run()
+   */
+  gboolean (*demux_sent_event) (GstAdaptiveDemuxTestEngine *engine,
+      GstAdaptiveDemuxTestOutputStream * stream,
+      GstEvent * event, gpointer user_data);
 
   /**
    * bus_error_message: called if an error is posted to the bus
