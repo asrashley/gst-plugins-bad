@@ -136,6 +136,9 @@ typedef struct _GstAdaptiveDemuxTestCase
 
   /* timeshift buffer depth, in ms. -1 for infinite */
   gint64 timeshiftBufferDepth;
+
+  /* the number of seconds the server clock is ahead of client clock */
+  gint64 clockCompensation;
 } GstAdaptiveDemuxTestCase;
 
 /* high-level unit test functions */
