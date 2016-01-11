@@ -154,17 +154,17 @@ on_appsink_event (GstPad * pad, GstPadProbeInfo * info, gpointer data)
   GST_DEBUG ("Received event %" GST_PTR_FORMAT " on pad %" GST_PTR_FORMAT,
       event, pad);
 
+  GST_TEST_LOCK (priv);
   if (priv->callbacks->appsink_event) {
     GstPad *stream_pad = gst_pad_get_peer (pad);
     fail_unless (stream_pad != NULL);
 
-    GST_TEST_LOCK (priv);
     stream = getTestOutputDataByPad (priv, stream_pad, TRUE);
-    GST_TEST_UNLOCK (priv);
     gst_object_unref (stream_pad);
     priv->callbacks->appsink_event (&priv->engine, stream, event,
         priv->user_data);
   }
+  GST_TEST_UNLOCK (priv);
 
   return GST_PAD_PROBE_OK;
 }
@@ -182,13 +182,12 @@ on_demux_sent_data (GstPad * pad, GstPadProbeInfo * info, gpointer data)
   buffer = GST_PAD_PROBE_INFO_BUFFER (info);
 
   GST_TEST_LOCK (priv);
-  stream = getTestOutputDataByPad (priv, pad, TRUE);
-  GST_TEST_UNLOCK (priv);
-
   if (priv->callbacks->demux_sent_data) {
+    stream = getTestOutputDataByPad (priv, pad, TRUE);
     (*priv->callbacks->demux_sent_data) (&priv->engine,
         stream, buffer, priv->user_data);
   }
+  GST_TEST_UNLOCK (priv);
 
   return GST_PAD_PROBE_OK;
 }
@@ -288,8 +287,6 @@ on_demuxNewPad (GstElement * demux, GstPad * pad, gpointer user_data)
   g_free (name);
   fail_unless (sink != NULL);
 
-  GST_TEST_LOCK (priv);
-
   /* register the AppSink pointer in the test output data */
   gst_object_ref (sink);
   stream->appsink = GST_APP_SINK (sink);
@@ -316,6 +313,7 @@ on_demuxNewPad (GstElement * demux, GstPad * pad, gpointer user_data)
   stream->pad = gst_object_ref (pad);
 
 
+  GST_TEST_LOCK (priv);
   g_ptr_array_add (priv->engine.output_streams, stream);
   GST_TEST_UNLOCK (priv);
 
@@ -328,6 +326,7 @@ on_demuxNewPad (GstElement * demux, GstPad * pad, gpointer user_data)
   fail_unless_equals_int (ret, TRUE);
   ret = gst_element_sync_state_with_parent (sink);
   fail_unless_equals_int (ret, TRUE);
+
   GST_TEST_LOCK (priv);
   if (priv->callbacks->demux_pad_added) {
     priv->callbacks->demux_pad_added (&priv->engine, stream, priv->user_data);
@@ -438,10 +437,11 @@ gst_adaptive_demux_test_run (const gchar * element_name,
   priv->user_data = user_data;
   priv->engine.loop = g_main_loop_new (NULL, TRUE);
   fail_unless (priv->engine.loop != NULL);
-  GST_TEST_LOCK (priv);
   priv->engine.pipeline = gst_pipeline_new ("pipeline");
   fail_unless (priv->engine.pipeline != NULL);
   GST_DEBUG ("created pipeline %" GST_PTR_FORMAT, priv->engine.pipeline);
+
+  GST_TEST_LOCK (priv);
 
   /* register a callback to listen for error messages */
   bus = gst_pipeline_get_bus (GST_PIPELINE (priv->engine.pipeline));
@@ -499,7 +499,8 @@ gst_adaptive_demux_test_run (const gchar * element_name,
   stateChange = gst_element_set_state (priv->engine.pipeline, GST_STATE_NULL);
   fail_unless (stateChange != GST_STATE_CHANGE_FAILURE);
 
-  GST_TEST_LOCK (priv);
+  /* pipeline stopped. No other thread should use priv any more, so we no
+   * longer lock it and it is safe to clear the lock. */
 
   /* call a test callback after the stop of the pipeline */
   if (callbacks->post_test)
@@ -519,7 +520,6 @@ gst_adaptive_demux_test_run (const gchar * element_name,
   g_main_loop_unref (priv->engine.loop);
   g_ptr_array_unref (priv->engine.output_streams);
 
-  GST_TEST_UNLOCK (priv);
   g_mutex_clear (&priv->engine.lock);
   g_slice_free (GstAdaptiveDemuxTestEnginePrivate, priv);
 }
