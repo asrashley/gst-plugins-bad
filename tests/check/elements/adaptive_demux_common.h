@@ -114,6 +114,9 @@ typedef struct _GstAdaptiveDemuxTestCase
 
   /* for live mpd, the wallclock time when MPD started to be available */
   GDateTime *availabilityStartTime;
+
+  /* timeshift buffer depth, in ms. -1 for infinite */
+  gint64 timeshiftBufferDepth;
 } GstAdaptiveDemuxTestCase;
 
 /* high-level unit test functions */
