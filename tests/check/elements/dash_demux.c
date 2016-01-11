@@ -1419,7 +1419,13 @@ testLiveStreamCheckDataReceived (GstAdaptiveDemuxTestEngine *
     gst_query_parse_seeking (query, NULL, &seekable, &segment_start,
         &segment_end);
     fail_unless (seekable == TRUE);
-    fail_unless (segment_start == 0);
+    if (testData->timeshiftBufferDepth == -1) {
+      /* infinite timeshift buffer, start should be 0 */
+      fail_unless (segment_start == 0);
+    } else {
+      fail_unless (segment_start + testData->timeshiftBufferDepth ==
+          segment_end);
+    }
 
     streamTime = getCurrentPresentationTime (testData->availabilityStartTime);
 
@@ -1595,7 +1601,13 @@ testLiveStreamPresentationDelayCheckDataReceived (GstAdaptiveDemuxTestEngine *
     gst_query_parse_seeking (query, NULL, &seekable, &segment_start,
         &segment_end);
     fail_unless (seekable == TRUE);
-    fail_unless (segment_start == 0);
+    if (testData->timeshiftBufferDepth == -1) {
+      /* infinite timeshift buffer, start should be 0 */
+      fail_unless (segment_start == 0);
+    } else {
+      fail_unless (segment_start + testData->timeshiftBufferDepth ==
+          segment_end);
+    }
 
     streamTime = getCurrentPresentationTime (testData->availabilityStartTime);
 
@@ -1665,6 +1677,7 @@ GST_START_TEST (testLiveStreamPresentationDelay)
   const gchar *mpd_2 = "\""
       "     minBufferTime=\"PT1.500S\""
       "     suggestedPresentationDelay=\"PT3S\""
+      "     timeShiftBufferDepth=\"PT5S\""
       "     minimumUpdatePeriod=\"PT500S\">"
       "  <Period>"
       "    <AdaptationSet mimeType=\"audio/webm\""
@@ -1718,6 +1731,7 @@ GST_START_TEST (testLiveStreamPresentationDelay)
   testData = gst_adaptive_demux_test_case_new ();
   COPY_OUTPUT_TEST_DATA (outputTestData, testData);
   testData->availabilityStartTime = availabilityStartTime;
+  testData->timeshiftBufferDepth = 5 * GST_SECOND;
 
   gst_adaptive_demux_test_run (DEMUX_ELEMENT_NAME, "http://unit.test/test.mpd",
       &test_callbacks, testData);

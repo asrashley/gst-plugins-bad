@@ -84,6 +84,7 @@ gst_adaptive_demux_test_case_clear (GstAdaptiveDemuxTestCase * testData)
     g_date_time_unref (testData->availabilityStartTime);
     testData->availabilityStartTime = NULL;
   }
+  testData->timeshiftBufferDepth = -1;
 }
 
 
