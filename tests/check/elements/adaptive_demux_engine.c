@@ -157,7 +157,6 @@ on_appsink_event (GstPad * pad, GstPadProbeInfo * info, gpointer data)
   if (priv->callbacks->appsink_event) {
     GstPad *stream_pad = gst_pad_get_peer (pad);
     fail_unless (stream_pad != NULL);
-
     GST_TEST_LOCK (priv);
     stream = getTestOutputDataByPad (priv, stream_pad, TRUE);
     GST_TEST_UNLOCK (priv);
