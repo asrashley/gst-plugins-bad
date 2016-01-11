@@ -111,6 +111,9 @@ typedef struct _GstAdaptiveDemuxTestCase
   GstEvent *seek_event;
 
   gpointer signal_context;
+
+  /* for live mpd, the wallclock time when MPD started to be available */
+  GDateTime *availabilityStartTime;
 } GstAdaptiveDemuxTestCase;
 
 /* high-level unit test functions */
