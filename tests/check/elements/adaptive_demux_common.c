@@ -96,6 +96,7 @@ gst_adaptive_demux_test_case_clear (GstAdaptiveDemuxTestCase * testData)
     testData->availabilityStartTime = NULL;
   }
   testData->timeshiftBufferDepth = -1;
+  testData->clockCompensation = 0;
 }
 
 
