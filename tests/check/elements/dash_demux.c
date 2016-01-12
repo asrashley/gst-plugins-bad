@@ -876,6 +876,9 @@ testQueryCheckDataReceived (GstAdaptiveDemuxTestEngine * engine,
   gboolean seekable;
   gint64 segment_start;
   gint64 segment_end;
+  gboolean live;
+  GstClockTime min_latency;
+  GstClockTime max_latency;
   gchar *uri;
   gchar *redirect_uri;
   gboolean redirect_permanent;
@@ -887,13 +890,16 @@ testQueryCheckDataReceived (GstAdaptiveDemuxTestEngine * engine,
   fail_unless (g_list_length (pads) == 1);
   pad = GST_PAD (pads->data);
 
+  /* duration query */
   query = gst_query_new_duration (GST_FORMAT_TIME);
   ret = gst_pad_peer_query (pad, query);
   fail_unless (ret == TRUE);
   gst_query_parse_duration (query, NULL, &duration);
+  /* mediaPresentationDuration=\"PT135.743S\" */
   fail_unless (duration == 135743 * GST_MSECOND);
   gst_query_unref (query);
 
+  /* seek query */
   query = gst_query_new_seeking (GST_FORMAT_TIME);
   ret = gst_pad_peer_query (pad, query);
   fail_unless (ret == TRUE);
@@ -904,6 +910,17 @@ testQueryCheckDataReceived (GstAdaptiveDemuxTestEngine * engine,
   fail_unless (segment_end == duration);
   gst_query_unref (query);
 
+  /* latency query */
+  query = gst_query_new_latency ();
+  ret = gst_pad_peer_query (pad, query);
+  fail_unless (ret == TRUE);
+  gst_query_parse_latency (query, &live, &min_latency, &max_latency);
+  fail_unless (live == FALSE);
+  fail_unless (min_latency == 0);
+  fail_unless (max_latency == -1);
+  gst_query_unref (query);
+
+  /* uri query */
   query = gst_query_new_uri ();
   ret = gst_pad_peer_query (pad, query);
   fail_unless (ret == TRUE);
