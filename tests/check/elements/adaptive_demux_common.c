@@ -199,12 +199,12 @@ gst_adaptive_demux_test_check_received_data (GstAdaptiveDemuxTestEngine *
   GST_DEBUG
       ("total_received_size=%" G_GUINT64_FORMAT
       " segment_received_size = %" G_GUINT64_FORMAT
-      " buffer_size=%d"
+      " buffer_size=%" G_GUINT64_FORMAT
       " expected_size=%" G_GUINT64_FORMAT
       " segment_start = %" G_GUINT64_FORMAT,
       stream->total_received_size,
       stream->segment_received_size,
-      gst_buffer_get_size (buffer),
+      (guint64) gst_buffer_get_size (buffer),
       testOutputStreamData->expected_size, stream->segment_start);
 
   fail_unless (stream->total_received_size +
