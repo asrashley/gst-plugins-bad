@@ -1944,15 +1944,18 @@ static GstDateTime *
 gst_dash_demux_parse_http_xsdate (GstDashDemuxClockDrift * clock_drift,
     GstBuffer * buffer)
 {
-  GstDateTime *value;
+  GstDateTime *value = NULL;
   GstMapInfo mapinfo;
+  gpointer str;
 
   /* the string from the server might not be zero terminated */
-  gst_buffer_resize (buffer, 0, gst_buffer_get_size (buffer) + 1);
-  gst_buffer_map (buffer, &mapinfo, GST_MAP_READ | GST_MAP_WRITE);
-  mapinfo.data[mapinfo.size - 1] = '\0';
-  value = gst_date_time_new_from_iso8601_string ((const gchar *) mapinfo.data);
-  gst_buffer_unmap (buffer, &mapinfo);
+  str = g_malloc0 (gst_buffer_get_size (buffer) + 1);
+  if (gst_buffer_map (buffer, &mapinfo, GST_MAP_READ)) {
+    memcpy (str, mapinfo.data, gst_buffer_get_size (buffer));
+    gst_buffer_unmap (buffer, &mapinfo);
+    value = gst_date_time_new_from_iso8601_string ((const gchar *) str);
+  }
+  g_free (str);
   return value;
 }
 
