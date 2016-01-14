@@ -2908,11 +2908,10 @@ testClockCompensationHttpHead_http_src_start (GstTestHTTPSrc * src,
   gboolean ret;
 
   ret = gst_dashdemux_http_src_start (src, uri, input_data, user_data);
-  if (ret && strcmp (uri, "http://mocktime/http-head") == 0) {
+  if (ret && g_strcmp0 (uri, "http://mocktime/http-head") == 0) {
     GDateTime *now;
     GDateTime *new_time;
     gchar *date_str;
-
     const GstDashDemuxTestInputData *test_input_data =
         (const GstDashDemuxTestInputData *) input_data->context;
 
@@ -2926,11 +2925,10 @@ testClockCompensationHttpHead_http_src_start (GstTestHTTPSrc * src,
     date_str = g_date_time_format (new_time, "%a, %e %b %Y %T %Z");
     fail_unless (date_str != NULL);
     g_date_time_unref (new_time);
-
-    input_data->response_headers = gst_structure_new_empty ("response-headers");
+    input_data->response_headers =
+        gst_structure_new (TEST_HTTP_SRC_RESPONSE_HEADERS_NAME, "Date",
+        G_TYPE_STRING, date_str, NULL);
     fail_unless (input_data->response_headers != NULL);
-    gst_structure_set (input_data->response_headers,
-        "Date", G_TYPE_STRING, date_str, NULL);
     g_free (date_str);
   }
   return ret;
