@@ -2733,76 +2733,67 @@ gst_dashdemux_http_src_create_mock_time_server (GstTestHTTPSrc * src,
 {
   const GstDashDemuxTestInputData *input =
       (const GstDashDemuxTestInputData *) context;
+  GDateTime *now;
+  GDateTime *newTime;
+  GstMapInfo info;
+  GstBuffer *buf;
 
+  if (!g_str_has_prefix (input->uri, "http://mocktime")) {
+    return gst_dashdemux_http_src_create (src, offset, length, retbuf, context,
+        user_data);
+  }
   /* time server is a special case
    * Return the current time updated with the number of seconds configured in
    * payload
    */
-  if (g_str_has_prefix (input->uri, "http://mocktime")) {
-    GDateTime *now;
-    GDateTime *newTime;
-    GstMapInfo info;
-    GstBuffer *buf;
+  now = g_date_time_new_now_utc ();
+  newTime = g_date_time_add_seconds (now, atoi ((const char *) input->payload));
+  g_date_time_unref (now);
 
-    now = g_date_time_new_now_utc ();
-    newTime =
-        g_date_time_add_seconds (now, atoi ((const char *) input->payload));
-    g_date_time_unref (now);
+  if (g_strcmp0 (input->uri, "http://mocktime/http-xsdate") == 0) {
+    gchar *newTimeString;
+    newTimeString =
+        g_strdup_printf ("%04d-%02d-%02dT%02d:%02d:%02d.%06dZ",
+        g_date_time_get_year (newTime),
+        g_date_time_get_month (newTime),
+        g_date_time_get_day_of_month (newTime),
+        g_date_time_get_hour (newTime),
+        g_date_time_get_minute (newTime),
+        g_date_time_get_second (newTime),
+        g_date_time_get_microsecond (newTime));
+    /* use strlen (newTimeString) rather than strlen (newTimeString)+1
+       so that the buffer does not contain the zero terminator */
+    buf = gst_buffer_new_wrapped (newTimeString, strlen (newTimeString));
+    fail_if (buf == NULL, "Not enough memory to allocate buffer");
+  } else if (g_strcmp0 (input->uri, "http://mocktime/http-ntp") == 0) {
+    guint64 fraction;
 
-    if (g_str_has_prefix (input->uri, "http://mocktime/http-xsdate")) {
-      gchar *newTimeString;
-      newTimeString =
-          g_strdup_printf ("%04d-%02d-%02dT%02d:%02d:%02d.%06d",
-          g_date_time_get_year (newTime),
-          g_date_time_get_month (newTime),
-          g_date_time_get_day_of_month (newTime),
-          g_date_time_get_hour (newTime),
-          g_date_time_get_minute (newTime),
-          g_date_time_get_second (newTime),
-          g_date_time_get_microsecond (newTime));
-      g_date_time_unref (newTime);
+    buf = gst_buffer_new_allocate (NULL, 8, NULL);
+    fail_if (buf == NULL, "Not enough memory to allocate buffer");
 
-      buf = gst_buffer_new_allocate (NULL, strlen (newTimeString) + 1, NULL);
-      fail_if (buf == NULL, "Not enough memory to allocate buffer");
+    fraction = gst_util_uint64_scale (g_date_time_get_microsecond (newTime),
+        G_GUINT64_CONSTANT (1) << 32, 1000000);
+    fail_unless (gst_buffer_map (buf, &info, GST_MAP_WRITE));
+    GST_WRITE_UINT32_BE (info.data,
+        g_date_time_to_unix (newTime) + NTP_TO_UNIX_EPOCH);
+    GST_WRITE_UINT32_BE (info.data + 4, fraction);
 
-      gst_buffer_map (buf, &info, GST_MAP_WRITE);
-      strcpy ((gchar *) info.data, newTimeString);
-      gst_buffer_unmap (buf, &info);
-      g_free (newTimeString);
+    gst_buffer_unmap (buf, &info);
 
-    } else if (g_str_has_prefix (input->uri, "http://mocktime/http-ntp")) {
-      guint64 fraction;
-
-      buf = gst_buffer_new_allocate (NULL, 8, NULL);
-      fail_if (buf == NULL, "Not enough memory to allocate buffer");
-
-      fraction = gst_util_uint64_scale (g_date_time_get_microsecond (newTime),
-          G_GUINT64_CONSTANT (1) << 32, 1000000);
-      gst_buffer_map (buf, &info, GST_MAP_WRITE);
-      GST_WRITE_UINT32_BE (info.data,
-          g_date_time_to_unix (newTime) + NTP_TO_UNIX_EPOCH);
-      GST_WRITE_UINT32_BE (info.data + 4, fraction);
-
-      gst_buffer_unmap (buf, &info);
-      g_date_time_unref (newTime);
-
-    } else {
-      g_date_time_unref (newTime);
-      GST_ELEMENT_ERROR (src, RESOURCE, NOT_FOUND, ("%s %s",
-              "Unrecognised UTCtiming protocol", input->uri), ("%s %s",
-              "Unrecognised UTCtiming protocol", input->uri));
-      return GST_FLOW_ERROR;
-    }
-
-    GST_BUFFER_OFFSET (buf) = 0;
-    GST_BUFFER_OFFSET_END (buf) = gst_buffer_get_size (buf);
-    *retbuf = buf;
-
-    return GST_FLOW_OK;
+  } else {
+    g_date_time_unref (newTime);
+    GST_ELEMENT_ERROR (src, RESOURCE, NOT_FOUND, ("%s %s",
+            "Unrecognised UTCtiming protocol", input->uri), ("%s %s",
+            "Unrecognised UTCtiming protocol", input->uri));
+    return GST_FLOW_ERROR;
   }
 
-  return gst_dashdemux_http_src_create (src, offset, length, retbuf, context,
-      user_data);
+  g_date_time_unref (newTime);
+  GST_BUFFER_OFFSET (buf) = 0;
+  GST_BUFFER_OFFSET_END (buf) = gst_buffer_get_size (buf);
+  *retbuf = buf;
+
+  return GST_FLOW_OK;
 }
 
 /*
