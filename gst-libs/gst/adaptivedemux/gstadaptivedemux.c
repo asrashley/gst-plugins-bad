@@ -415,6 +415,8 @@ gst_adaptive_demux_init (GstAdaptiveDemux * demux,
     GstAdaptiveDemuxClass * klass)
 {
   GstPadTemplate *pad_template;
+  GstClockType clock_type = GST_CLOCK_TYPE_REALTIME;
+  GObjectClass *gobject_class;
 
   GST_DEBUG_OBJECT (demux, "gst_adaptive_demux_init");
 
@@ -428,6 +430,27 @@ gst_adaptive_demux_init (GstAdaptiveDemux * demux,
 
   gst_segment_init (&demux->segment, GST_FORMAT_TIME);
 
+  demux->realtime_clock = gst_system_clock_obtain ();
+  g_assert (demux->realtime_clock != NULL);
+  gobject_class = G_OBJECT_GET_CLASS (demux->realtime_clock);
+  if (g_object_class_find_property (gobject_class, "clock-type")) {
+    g_object_get (demux->realtime_clock, "clock-type", &clock_type, NULL);
+  }
+  if (clock_type == GST_CLOCK_TYPE_REALTIME) {
+    demux->clock_offset = 0;
+  } else {
+    GDateTime *utc_now;
+    GstClockTime rtc_now;
+    GTimeVal gtv;
+
+    utc_now = g_date_time_new_now_utc ();
+    rtc_now = gst_clock_get_time (demux->realtime_clock);
+    g_date_time_to_timeval (utc_now, &gtv);
+    demux->clock_offset =
+        gtv.tv_sec * G_TIME_SPAN_SECOND + gtv.tv_usec -
+        GST_TIME_AS_USECONDS (rtc_now);
+    g_date_time_unref (utc_now);
+  }
   g_rec_mutex_init (&demux->priv->updates_lock);
   demux->priv->updates_task =
       gst_task_new ((GstTaskFunction) gst_adaptive_demux_updates_loop,
@@ -481,6 +504,10 @@ gst_adaptive_demux_finalize (GObject * object)
   g_rec_mutex_clear (&demux->priv->manifest_lock);
   g_mutex_clear (&demux->priv->api_lock);
   g_mutex_clear (&demux->priv->segment_lock);
+  if (demux->realtime_clock) {
+    gst_object_unref (demux->realtime_clock);
+    demux->realtime_clock = NULL;
+  }
 
   G_OBJECT_CLASS (parent_class)->finalize (object);
 }
@@ -2038,7 +2065,8 @@ _src_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
   }
 
   stream->download_total_time +=
-      g_get_monotonic_time () - stream->download_chunk_start_time;
+      GST_TIME_AS_USECONDS (gst_adaptive_demux_get_monotonic_time (demux)) -
+      stream->download_chunk_start_time;
   stream->download_total_bytes += gst_buffer_get_size (buffer);
 
   gst_adapter_push (stream->adapter, buffer);
@@ -2059,7 +2087,8 @@ _src_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
     g_mutex_unlock (&stream->fragment_download_lock);
   }
 
-  stream->download_chunk_start_time = g_get_monotonic_time ();
+  stream->download_chunk_start_time =
+      GST_TIME_AS_USECONDS (gst_adaptive_demux_get_monotonic_time (demux));
 
   if (ret != GST_FLOW_OK) {
     if (ret < GST_FLOW_EOS) {
@@ -2441,8 +2470,9 @@ gst_adaptive_demux_stream_download_uri (GstAdaptiveDemux * demux,
     }
 
     if (G_LIKELY (stream->last_ret == GST_FLOW_OK)) {
-      stream->download_start_time = g_get_monotonic_time ();
-      stream->download_chunk_start_time = g_get_monotonic_time ();
+      stream->download_start_time =
+          GST_TIME_AS_USECONDS (gst_adaptive_demux_get_monotonic_time (demux));
+      stream->download_chunk_start_time = stream->download_start_time;
 
       /* src element is in state READY. Before we start it, we reset
        * download_finished
@@ -2646,7 +2676,8 @@ static void
 gst_adaptive_demux_stream_download_loop (GstAdaptiveDemuxStream * stream)
 {
   GstAdaptiveDemux *demux = stream->demux;
-  guint64 next_download = g_get_monotonic_time ();
+  guint64 next_download =
+      GST_TIME_AS_USECONDS (gst_adaptive_demux_get_monotonic_time (demux));
   GstFlowReturn ret;
   gboolean live;
 
@@ -2788,7 +2819,9 @@ gst_adaptive_demux_stream_download_loop (GstAdaptiveDemuxStream * stream)
       gint64 wait_time =
           gst_adaptive_demux_stream_get_fragment_waiting_time (demux, stream);
       if (wait_time > 0) {
-        gint64 end_time = g_get_monotonic_time () + wait_time / GST_USECOND;
+        gint64 end_time =
+            GST_TIME_AS_USECONDS (gst_adaptive_demux_get_monotonic_time (demux))
+            + wait_time / GST_USECOND;
 
         GST_DEBUG_OBJECT (stream->pad, "Download waiting for %" GST_TIME_FORMAT,
             GST_TIME_ARGS (wait_time));
@@ -2822,7 +2855,8 @@ gst_adaptive_demux_stream_download_loop (GstAdaptiveDemuxStream * stream)
 
     stream->last_ret = GST_FLOW_OK;
 
-    next_download = g_get_monotonic_time ();
+    next_download =
+        GST_TIME_AS_USECONDS (gst_adaptive_demux_get_monotonic_time (demux));
     ret = gst_adaptive_demux_stream_download_fragment (stream);
 
     if (ret == GST_FLOW_FLUSHING) {
@@ -3015,7 +3049,8 @@ gst_adaptive_demux_updates_loop (GstAdaptiveDemux * demux)
 
   GST_MANIFEST_LOCK (demux);
 
-  next_update = g_get_monotonic_time () +
+  next_update =
+      GST_TIME_AS_USECONDS (gst_adaptive_demux_get_monotonic_time (demux)) +
       klass->get_manifest_update_interval (demux);
 
   /* Updating playlist only needed for live playlists */
@@ -3056,8 +3091,9 @@ gst_adaptive_demux_updates_loop (GstAdaptiveDemux * demux)
       demux->priv->update_failed_count++;
       if (demux->priv->update_failed_count <= DEFAULT_FAILED_COUNT) {
         GST_WARNING_OBJECT (demux, "Could not update the playlist");
-        next_update = g_get_monotonic_time () +
-            klass->get_manifest_update_interval (demux);
+        next_update =
+            GST_TIME_AS_USECONDS (gst_adaptive_demux_get_monotonic_time (demux))
+            + klass->get_manifest_update_interval (demux);
       } else {
         GST_ELEMENT_ERROR (demux, STREAM, FAILED,
             (_("Internal data stream error.")), ("Could not update playlist"));
@@ -3068,7 +3104,8 @@ gst_adaptive_demux_updates_loop (GstAdaptiveDemux * demux)
       }
     } else {
       GST_DEBUG_OBJECT (demux, "Updated playlist successfully");
-      next_update = g_get_monotonic_time () +
+      next_update =
+          GST_TIME_AS_USECONDS (gst_adaptive_demux_get_monotonic_time (demux)) +
           klass->get_manifest_update_interval (demux);
 
       /* Wake up download tasks */
@@ -3216,7 +3253,7 @@ gst_adaptive_demux_stream_advance_fragment_unlocked (GstAdaptiveDemux * demux,
   }
 
   stream->download_start_time = stream->download_chunk_start_time =
-      g_get_monotonic_time ();
+      GST_TIME_AS_USECONDS (gst_adaptive_demux_get_monotonic_time (demux));
 
   if (ret == GST_FLOW_OK) {
     guint64 bitrate;
@@ -3408,4 +3445,36 @@ gst_adaptive_demux_advance_period (GstAdaptiveDemux * demux)
   klass->advance_period (demux);
   gst_adaptive_demux_expose_streams (demux, FALSE);
   gst_adaptive_demux_start_tasks (demux);
+}
+
+/**
+ * gst_adaptive_demux_get_monotonic_time:
+ * Returns: a monotonically increasing time, using the system realtime clock
+ */
+GstClockTime
+gst_adaptive_demux_get_monotonic_time (GstAdaptiveDemux * demux)
+{
+  g_return_val_if_fail (demux != NULL, GST_CLOCK_TIME_NONE);
+  return gst_clock_get_time (demux->realtime_clock);
+}
+
+/**
+ * gst_adaptive_demux_get_client_now_utc:
+ * @demux: #GstAdaptiveDemux
+ * Returns: the client's estimate of UTC
+ *
+ * Used to find the client's estimate of UTC, using the system realtime clock.
+ */
+GDateTime *
+gst_adaptive_demux_get_client_now_utc (GstAdaptiveDemux * demux)
+{
+  GstClockTime rtc_now;
+  gint64 utc_now;
+  GTimeVal gtv;
+
+  rtc_now = gst_clock_get_time (demux->realtime_clock);
+  utc_now = demux->clock_offset + GST_TIME_AS_USECONDS (rtc_now);
+  gtv.tv_sec = utc_now / G_TIME_SPAN_SECOND;
+  gtv.tv_usec = utc_now % G_TIME_SPAN_SECOND;
+  return g_date_time_new_from_timeval_utc (&gtv);
 }
