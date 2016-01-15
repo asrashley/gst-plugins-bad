@@ -19,6 +19,7 @@
  */
 
 #include <gst/check/gstcheck.h>
+#include <gst/check/gsttestclock.h>
 #include "adaptive_demux_engine.h"
 
 typedef struct _GstAdaptiveDemuxTestEnginePrivate
@@ -26,6 +27,7 @@ typedef struct _GstAdaptiveDemuxTestEnginePrivate
   GstAdaptiveDemuxTestEngine engine;
   const GstAdaptiveDemuxTestCallbacks *callbacks;
   gpointer user_data;
+  guint clock_update_id;
 } GstAdaptiveDemuxTestEnginePrivate;
 
 
@@ -419,6 +421,30 @@ on_ErrorMessageOnBus (GstBus * bus, GstMessage * msg, gpointer user_data)
 }
 
 static gboolean
+gst_adaptive_demux_update_test_clock (gpointer user_data)
+{
+  GstAdaptiveDemuxTestEnginePrivate *priv =
+      (GstAdaptiveDemuxTestEnginePrivate *) user_data;
+  GstClockID id;
+  GstClockTime next_entry;
+  GstTestClock *clock = GST_TEST_CLOCK (priv->engine.clock);
+
+  if (clock) {
+    next_entry = gst_test_clock_get_next_entry_time (clock);
+    if (next_entry != GST_CLOCK_TIME_NONE) {
+      gst_test_clock_set_time (clock, next_entry);
+    }
+    id = gst_test_clock_process_next_clock_id (clock);
+    if (id) {
+      gst_clock_id_unref (id);
+    }
+    return TRUE;
+  }
+  priv->clock_update_id = 0;
+  return FALSE;
+}
+
+static gboolean
 start_pipeline_playing (gpointer user_data)
 {
   GstAdaptiveDemuxTestEnginePrivate *priv =
@@ -430,6 +456,8 @@ start_pipeline_playing (gpointer user_data)
       gst_element_set_state (priv->engine.pipeline, GST_STATE_PLAYING);
   fail_unless (stateChange != GST_STATE_CHANGE_FAILURE);
   GST_DEBUG ("PLAYING stateChange = %d", stateChange);
+  priv->clock_update_id =
+      g_timeout_add (100, gst_adaptive_demux_update_test_clock, priv);
   return FALSE;
 }
 
@@ -463,6 +491,8 @@ gst_adaptive_demux_test_run (const gchar * element_name,
   GST_DEBUG ("created pipeline %" GST_PTR_FORMAT, priv->engine.pipeline);
 
   GST_TEST_LOCK (&priv->engine);
+  priv->engine.clock = gst_test_clock_new ();
+  gst_system_clock_set_default (priv->engine.clock);
 
   /* register a callback to listen for error messages */
   bus = gst_pipeline_get_bus (GST_PIPELINE (priv->engine.pipeline));
@@ -536,6 +566,11 @@ gst_adaptive_demux_test_run (const gchar * element_name,
       priv);
 
   GST_DEBUG ("main thread pipeline stopped");
+  gst_system_clock_set_default (NULL);
+  if (priv->clock_update_id) {
+    g_source_remove (priv->clock_update_id);
+  }
+  gst_object_unref (priv->engine.clock);
   gst_object_unref (priv->engine.pipeline);
   priv->engine.pipeline = NULL;
   g_main_loop_unref (priv->engine.loop);
