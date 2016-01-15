@@ -3394,13 +3394,28 @@ gst_adaptive_demux_wait_until (GstClock * clock, GCond * cond, GMutex * mutex,
     GstClockTime end_time)
 {
   GstAdaptiveDemuxTimer timer;
+  GstClockReturn res;
 
+  if (G_UNLIKELY (!GST_CLOCK_TIME_IS_VALID (end_time))) {
+    /* for an invalid time, gst_clock_id_wait_async will try to call
+     * gst_adaptive_demux_clock_callback from the current thread.
+     * It still holds the mutex while doing that, so it will deadlock.
+     * g_cond_wait_until would return immediately with false, so we'll do the same.
+     */
+    return FALSE;
+  }
   timer.fired = FALSE;
   timer.cond = cond;
   timer.mutex = mutex;
   timer.clock_id = gst_clock_new_single_shot_id (clock, end_time);
-  gst_clock_id_wait_async (timer.clock_id, gst_adaptive_demux_clock_callback,
-      &timer, NULL);
+  res =
+      gst_clock_id_wait_async (timer.clock_id,
+      gst_adaptive_demux_clock_callback, &timer, NULL);
+  /* clock does not support asynchronously wait. Assert and return */
+  if (res == GST_CLOCK_UNSUPPORTED) {
+    gst_clock_id_unref (timer.clock_id);
+    g_return_val_if_reached (TRUE);
+  }
   /* the gst_adaptive_demux_clock_callback will signal the
      cond when the clock's single shot timer fires */
   g_cond_wait (cond, mutex);
