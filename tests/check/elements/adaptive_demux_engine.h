@@ -166,6 +166,7 @@ typedef struct _GstAdaptiveDemuxTestCallbacks
 struct _GstAdaptiveDemuxTestEngine
 {
   GstElement *pipeline;
+  GstClock *clock;
   GstElement *demux;
   GstElement *manifest_source;
   GMainLoop *loop;
