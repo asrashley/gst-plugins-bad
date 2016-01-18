@@ -77,7 +77,8 @@ generate_transport_stream (guint length)
 }
 
 static GByteArray *
-setup_test_variables (GstHlsDemuxTestInputData * inputTestData,
+setup_test_variables (const gchar * funcname,
+    GstHlsDemuxTestInputData * inputTestData,
     GstAdaptiveDemuxTestExpectedOutput * outputTestData,
     GstHlsDemuxTestCase * hlsTestCase,
     GstAdaptiveDemuxTestCase * engineTestData, guint segment_size)
@@ -99,7 +100,7 @@ setup_test_variables (GstHlsDemuxTestInputData * inputTestData,
     }
   }
   hlsTestCase->input = inputTestData;
-  hlsTestCase->state = gst_structure_new_empty (__FUNCTION__);
+  hlsTestCase->state = gst_structure_new_empty (funcname);
   return mpeg_ts;
 }
 
@@ -111,7 +112,7 @@ setup_test_variables (GstHlsDemuxTestInputData * inputTestData,
   GByteArray *mpeg_ts=NULL; \
   engineTestData = gst_adaptive_demux_test_case_new(); \
   fail_unless (engineTestData!=NULL); \
-  mpeg_ts = setup_test_variables(inputTestData, outputTestData, \
+  mpeg_ts = setup_test_variables(__FUNCTION__, inputTestData, outputTestData, \
                                  &hlsTestCase, engineTestData, segment_size); \
 
 #define TESTCASE_UNREF_BOILERPLATE do{ \
@@ -403,7 +404,7 @@ GST_START_TEST (testSeek)
   GByteArray *mpeg_ts = NULL;
 
   engineTestData = gst_adaptive_demux_test_case_new ();
-  mpeg_ts = setup_test_variables (inputTestData, outputTestData,
+  mpeg_ts = setup_test_variables (__FUNCTION__, inputTestData, outputTestData,
       &hlsTestCase, engineTestData, segment_size);
 
   http_src_callbacks.src_start = gst_hlsdemux_test_src_start;
@@ -459,7 +460,7 @@ run_seek_position_test (gdouble rate, GstSeekType start_type,
   GByteArray *mpeg_ts = NULL;
 
   engineTestData = gst_adaptive_demux_test_case_new ();
-  mpeg_ts = setup_test_variables (inputTestData, outputTestData,
+  mpeg_ts = setup_test_variables (__FUNCTION__, inputTestData, outputTestData,
       &hlsTestCase, engineTestData, segment_size);
 
   http_src_callbacks.src_start = gst_hlsdemux_test_src_start;
