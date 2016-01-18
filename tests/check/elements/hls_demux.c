@@ -775,7 +775,7 @@ static void
 connect_abr_signals (GstAdaptiveDemuxTestEngine * engine, gpointer user_data)
 {
   GstHlsDemuxTestSelectBitrateContext *context;
-  GstAdaptiveDemuxTestCase *testData = (GstAdaptiveDemuxTestCase *) user_data;
+  GstAdaptiveDemuxTestCase *testData = GST_ADAPTIVE_DEMUX_TEST_CASE (user_data);
 
   context = g_slice_new0 (GstHlsDemuxTestSelectBitrateContext);
   context->engine = engine;
