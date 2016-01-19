@@ -42,8 +42,6 @@ typedef struct _GstAdaptiveDemuxTestOutputStream {
   guint64 segment_received_size;
   /* the total size received so far on this stream, excluding current segment */
   guint64 total_received_size;
-  /* the number of Protection Events sent */
-  guint64 countContentProtectionEvents;
 } GstAdaptiveDemuxTestOutputStream;
 
 /* GstAdaptiveDemuxTestCallbacks: contains various callbacks that can
