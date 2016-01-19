@@ -1720,78 +1720,70 @@ testContentProtectionDashdemuxSendsEvent (GstAdaptiveDemuxTestEngine * engine,
     GstAdaptiveDemuxTestOutputStream * stream,
     GstEvent * event, gpointer user_data)
 {
+  GstAdaptiveDemuxTestCase *test_case =
+      GST_ADAPTIVE_DEMUX_TEST_CASE (user_data);
+  const gchar *system_id;
+  GstBuffer *data;
+  const gchar *origin;
+  GstMapInfo info;
+  gchar *value;
+  gchar *name;
+  guint event_count = 0;
+
   GST_DEBUG ("received event %s", GST_EVENT_TYPE_NAME (event));
 
-  if (GST_EVENT_TYPE (event) == GST_EVENT_PROTECTION) {
-    const gchar *system_id;
-    GstBuffer *data;
-    const gchar *origin;
-    GstMapInfo info;
-    gchar *value;
-    gchar *name;
-
-    /* we expect content protection events only on video pad */
-    name = gst_pad_get_name (stream->pad);
-    fail_unless (g_strcmp0 (name, "video_00") == 0);
-    g_free (name);
-    gst_event_parse_protection (event, &system_id, &data, &origin);
-
-    gst_buffer_map (data, &info, GST_MAP_READ);
-
-    value = g_malloc (info.size + 1);
-    strncpy (value, (gchar *) info.data, info.size);
-    value[info.size] = 0;
-
-    if (g_strcmp0 (system_id, "11111111-aaaa-bbbb-cccc-123456789abc") == 0) {
-      fail_unless (g_strcmp0 (origin, "dash/mpd") == 0);
-      fail_unless (g_strcmp0 (value, "test value") == 0);
-    } else if (g_strcmp0 (system_id,
-            "5e629af5-38da-4063-8977-97ffbd9902d4") == 0) {
-      const gchar *str;
-
-      fail_unless (g_strcmp0 (origin, "dash/mpd") == 0);
-
-      /* We can't do a simple compare of value (which should be an XML dump
-         of the ContentProtection element), because the whitespace
-         formatting from xmlDump might differ between versions of libxml */
-      str = strstr (value, "<ContentProtection");
-      fail_if (str == NULL);
-      str = strstr (value, "<mas:MarlinContentIds>");
-      fail_if (str == NULL);
-      str = strstr (value, "<mas:MarlinContentId>");
-      fail_if (str == NULL);
-      str = strstr (value, "urn:marlin:kid:02020202020202020202020202020202");
-      fail_if (str == NULL);
-      str = strstr (value, "</ContentProtection>");
-      fail_if (str == NULL);
-    } else {
-      fail ("unexpected content protection event '%s'", system_id);
-    }
-
-    g_free (value);
-    gst_buffer_unmap (data, &info);
-
-    ++stream->countContentProtectionEvents;
+  if (GST_EVENT_TYPE (event) != GST_EVENT_PROTECTION) {
+    return TRUE;
   }
 
-  return TRUE;
-}
-
-static void
-testContentProtectionCheckSizeOfDataReceived (GstAdaptiveDemuxTestEngine
-    * engine, GstAdaptiveDemuxTestOutputStream * stream, gpointer user_data)
-{
   /* we expect content protection events only on video pad */
-  gchar *name = gst_pad_get_name (stream->pad);
-  if (g_strcmp0 (name, "video_00") == 0) {
-    fail_unless (stream->countContentProtectionEvents == 2);
-  } else {
-    fail_unless (stream->countContentProtectionEvents == 0);
-  }
-  g_free (name);
+  name = gst_pad_get_name (stream->pad);
+  fail_unless (g_strcmp0 (name, "video_00") == 0);
+  gst_event_parse_protection (event, &system_id, &data, &origin);
 
-  return gst_adaptive_demux_test_check_size_of_received_data (engine, stream,
-      user_data);
+  gst_buffer_map (data, &info, GST_MAP_READ);
+
+  value = g_malloc (info.size + 1);
+  strncpy (value, (gchar *) info.data, info.size);
+  value[info.size] = 0;
+  gst_buffer_unmap (data, &info);
+
+  if (g_strcmp0 (system_id, "11111111-aaaa-bbbb-cccc-123456789abc") == 0) {
+    fail_unless (g_strcmp0 (origin, "dash/mpd") == 0);
+    fail_unless (g_strcmp0 (value, "test value") == 0);
+  } else if (g_strcmp0 (system_id, "5e629af5-38da-4063-8977-97ffbd9902d4") == 0) {
+    const gchar *str;
+
+    fail_unless (g_strcmp0 (origin, "dash/mpd") == 0);
+
+    /* We can't do a simple compare of value (which should be an XML dump
+       of the ContentProtection element), because the whitespace
+       formatting from xmlDump might differ between versions of libxml */
+    str = strstr (value, "<ContentProtection");
+    fail_if (str == NULL);
+    str = strstr (value, "<mas:MarlinContentIds>");
+    fail_if (str == NULL);
+    str = strstr (value, "<mas:MarlinContentId>");
+    fail_if (str == NULL);
+    str = strstr (value, "urn:marlin:kid:02020202020202020202020202020202");
+    fail_if (str == NULL);
+    str = strstr (value, "</ContentProtection>");
+    fail_if (str == NULL);
+  } else {
+    fail ("unexpected content protection event '%s'", system_id);
+  }
+
+  g_free (value);
+
+  fail_if (test_case->countContentProtectionEvents == NULL);
+  gst_structure_get_uint (test_case->countContentProtectionEvents, name,
+      &event_count);
+  event_count++;
+  gst_structure_set (test_case->countContentProtectionEvents, name, G_TYPE_UINT,
+      event_count, NULL);
+
+  g_free (name);
+  return TRUE;
 }
 
 /*
@@ -1868,6 +1860,7 @@ GST_START_TEST (testContentProtection)
   GstTestHTTPSrcTestData http_src_test_data = { 0 };
   GstAdaptiveDemuxTestCallbacks test_callbacks = { 0 };
   GstAdaptiveDemuxTestCase *testData;
+  guint event_count = 0;
 
   http_src_callbacks.src_start = gst_dashdemux_http_src_start;
   http_src_callbacks.src_create = gst_dashdemux_http_src_create;
@@ -1877,14 +1870,23 @@ GST_START_TEST (testContentProtection)
 
   test_callbacks.appsink_received_data =
       gst_adaptive_demux_test_check_received_data;
-  test_callbacks.appsink_eos = testContentProtectionCheckSizeOfDataReceived;
+  test_callbacks.appsink_eos =
+      gst_adaptive_demux_test_check_size_of_received_data;
   test_callbacks.demux_sent_event = testContentProtectionDashdemuxSendsEvent;
 
   testData = gst_adaptive_demux_test_case_new ();
   COPY_OUTPUT_TEST_DATA (outputTestData, testData);
-
+  testData->countContentProtectionEvents =
+      gst_structure_new_empty ("countContentProtectionEvents");
   gst_adaptive_demux_test_run (DEMUX_ELEMENT_NAME, "http://unit.test/test.mpd",
       &test_callbacks, testData);
+
+  fail_unless (gst_structure_has_field_typed
+      (testData->countContentProtectionEvents, "video_00", G_TYPE_UINT));
+
+  gst_structure_get_uint (testData->countContentProtectionEvents, "video_00",
+      &event_count);
+  fail_unless (event_count == 2);
 
   gst_object_unref (testData);
   if (http_src_test_data.data)

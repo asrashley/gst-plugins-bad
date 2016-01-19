@@ -102,6 +102,9 @@ typedef struct _GstAdaptiveDemuxTestCase
    */
   guint count_of_finished_streams;
 
+  /* the number of Protection Events sent to each pad */
+  GstStructure *countContentProtectionEvents;
+
   /* taskTesk... is a set of variables that can be used by a test
    * that needs to perform operations from another thread
    * For example, it is used by the seek test to perform the seek
