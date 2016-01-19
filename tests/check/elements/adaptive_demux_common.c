@@ -54,6 +54,7 @@ gst_adaptive_demux_test_case_init (GstAdaptiveDemuxTestCase * testData)
 {
   testData->output_streams = NULL;
   testData->test_task = NULL;
+  testData->countContentProtectionEvents = NULL;
   g_rec_mutex_init (&testData->test_task_lock);
   g_mutex_init (&testData->test_task_state_lock);
   g_cond_init (&testData->test_task_state_cond);
@@ -73,6 +74,10 @@ gst_adaptive_demux_test_case_clear (GstAdaptiveDemuxTestCase * testData)
     testData->output_streams = NULL;
   }
   testData->count_of_finished_streams = 0;
+  if (testData->countContentProtectionEvents) {
+    gst_structure_free (testData->countContentProtectionEvents);
+    testData->countContentProtectionEvents = NULL;
+  }
   if (testData->test_task) {
     gst_task_stop (testData->test_task);
     gst_task_join (testData->test_task);
