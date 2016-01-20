@@ -162,6 +162,16 @@ GType gst_adaptive_demux_test_case_get_type (void);
  */
 GstAdaptiveDemuxTestCase * gst_adaptive_demux_test_case_new (void) G_GNUC_MALLOC;
 
+void gst_adaptive_demux_test_barrier_init (
+    GstAdaptiveDemuxTestBarrier * barrier,
+    guint runners);
+
+void gst_adaptive_demux_test_barrier_clear (
+    GstAdaptiveDemuxTestBarrier * barrier);
+
+void gst_adaptive_demux_test_barrier_wait (
+    GstAdaptiveDemuxTestBarrier * barrier);
+
 /**
  * gst_adaptive_demux_test_seek: test that element supports seeking
  * @element_name: The name of the demux element (e.g. "dashdemux")
