@@ -25,11 +25,6 @@
 
 #define GST_TEST_HTTP_SRC_NAME            "testhttpsrc"
 
-struct _GstAdaptiveDemuxTestCaseClass
-{
-  GObjectClass parent_class;
-};
-
 #define gst_adaptive_demux_test_case_parent_class parent_class
 
 static void gst_adaptive_demux_test_case_dispose (GObject * object);
@@ -54,7 +49,6 @@ gst_adaptive_demux_test_case_init (GstAdaptiveDemuxTestCase * testData)
 {
   testData->output_streams = NULL;
   testData->test_task = NULL;
-  testData->countContentProtectionEvents = NULL;
   g_rec_mutex_init (&testData->test_task_lock);
   g_mutex_init (&testData->test_task_state_lock);
   g_cond_init (&testData->test_task_state_cond);
@@ -74,10 +68,6 @@ gst_adaptive_demux_test_case_clear (GstAdaptiveDemuxTestCase * testData)
     testData->output_streams = NULL;
   }
   testData->count_of_finished_streams = 0;
-  if (testData->countContentProtectionEvents) {
-    gst_structure_free (testData->countContentProtectionEvents);
-    testData->countContentProtectionEvents = NULL;
-  }
   if (testData->test_task) {
     gst_task_stop (testData->test_task);
     gst_task_join (testData->test_task);
@@ -96,12 +86,6 @@ gst_adaptive_demux_test_case_clear (GstAdaptiveDemuxTestCase * testData)
   testData->threshold_for_seek = 0;
   gst_event_replace (&testData->seek_event, NULL);
   testData->signal_context = NULL;
-  if (testData->availabilityStartTime) {
-    g_date_time_unref (testData->availabilityStartTime);
-    testData->availabilityStartTime = NULL;
-  }
-  testData->timeshiftBufferDepth = -1;
-  testData->clockCompensation = 0;
 }
 
 

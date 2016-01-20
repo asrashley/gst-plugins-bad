@@ -86,13 +86,17 @@ typedef struct _GstAdaptiveDemuxTestExpectedOutput
   gboolean segment_verification_needed;
 } GstAdaptiveDemuxTestExpectedOutput;
 
-typedef struct _GstAdaptiveDemuxTestCaseClass GstAdaptiveDemuxTestCaseClass;
+typedef struct _GstAdaptiveDemuxTestCaseClass
+{
+  GObjectClass parent_class;
+} GstAdaptiveDemuxTestCaseClass;
+
 typedef struct _GstAdaptiveDemuxTestCase
 {
   GObject parent;
 
   /* output data used to validate the test
-   * list of GstAdaptiveDemuxTestExpectedOutput, one entry per stream
+   * list of GstAdaptiveDemuxTestExpectedOutput, one entry per streamx
    */
   GList *output_streams; /*GList<GstAdaptiveDemuxTestExpectedOutput>*/
 
@@ -101,9 +105,6 @@ typedef struct _GstAdaptiveDemuxTestCase
    * (i.e. count_of_finished_streams == g_list_length(output_streams) )
    */
   guint count_of_finished_streams;
-
-  /* the number of Protection Events sent to each pad */
-  GstStructure *countContentProtectionEvents;
 
   /* taskTesk... is a set of variables that can be used by a test
    * that needs to perform operations from another thread
@@ -134,14 +135,6 @@ typedef struct _GstAdaptiveDemuxTestCase
 
   gpointer signal_context;
 
-  /* for live mpd, the wallclock time when MPD started to be available */
-  GDateTime *availabilityStartTime;
-
-  /* timeshift buffer depth, in ms. -1 for infinite */
-  gint64 timeshiftBufferDepth;
-
-  /* the number of seconds the server clock is ahead of client clock */
-  gint64 clockCompensation;
 } GstAdaptiveDemuxTestCase;
 
 /* high-level unit test functions */

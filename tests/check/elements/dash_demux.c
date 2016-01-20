@@ -26,7 +26,7 @@
 #define COPY_OUTPUT_TEST_DATA(outputTestData,testData) do { \
     guint otdPos, otdLen = sizeof((outputTestData)) / sizeof((outputTestData)[0]); \
     for(otdPos=0; otdPos<otdLen; ++otdPos){ \
-  (testData)->output_streams = g_list_append ((testData)->output_streams, &(outputTestData)[otdPos]); \
+  GST_ADAPTIVE_DEMUX_TEST_CASE (testData)->output_streams = g_list_append (GST_ADAPTIVE_DEMUX_TEST_CASE (testData)->output_streams, &(outputTestData)[otdPos]); \
     } \
   } while(0)
 
@@ -43,7 +43,109 @@ typedef struct _GstTestHTTPSrcTestData
   GstStructure *data;
 } GstTestHTTPSrcTestData;
 
+typedef struct _GstDashDemuxTestCase
+{
+  GstAdaptiveDemuxTestCase parent;
+
+  /* the number of Protection Events sent to each pad */
+  GstStructure *countContentProtectionEvents;
+
+  /* for live mpd, the wallclock time when MPD started to be available */
+  GDateTime *availabilityStartTime;
+
+  /* timeshift buffer depth, in ms. -1 for infinite */
+  gint64 timeshiftBufferDepth;
+
+  /* the number of seconds the server clock is ahead of client clock */
+  gint64 clockCompensation;
+} GstDashDemuxTestCase;
+
+GType gst_dash_demux_test_case_get_type (void);
+static void gst_dash_demux_test_case_dispose (GObject * object);
+static void gst_dash_demux_test_case_finalize (GObject * object);
+static void gst_dash_demux_test_case_clear (GstDashDemuxTestCase * test_case);
+
+static GstDashDemuxTestCase *
+gst_dash_demux_test_case_new (void)
+    G_GNUC_MALLOC;
+
 #define NTP_TO_UNIX_EPOCH G_GUINT64_CONSTANT(2208988800)        /* difference (in seconds) between NTP epoch and Unix epoch */
+#define GST_TYPE_DASH_DEMUX_TEST_CASE \
+  (gst_dash_demux_test_case_get_type())
+#define GST_DASH_DEMUX_TEST_CASE(obj) \
+  (G_TYPE_CHECK_INSTANCE_CAST((obj), GST_TYPE_DASH_DEMUX_TEST_CASE, GstDashDemuxTestCase))
+#define GST_DASH_DEMUX_TEST_CASE_CLASS(klass) \
+  (G_TYPE_CHECK_CLASS_CAST((klass), GST_TYPE_DASH_DEMUX_TEST_CASE, GstDashDemuxTestCaseClass))
+#define GST_DASH_DEMUX_TEST_CASE_GET_CLASS(obj) \
+  (G_TYPE_INSTANCE_GET_CLASS ((obj), GST_TYPE_DASH_DEMUX_TEST_CASE, GstDashDemuxTestCaseClass))
+#define GST_IS_DASH_DEMUX_TEST_CASE(obj) \
+  (G_TYPE_CHECK_INSTANCE_TYPE((obj), GST_TYPE_DASH_DEMUX_TEST_CASE))
+#define GST_IS_DASH_DEMUX_TEST_CASE_CLASS(klass) \
+  (G_TYPE_CHECK_CLASS_TYPE((klass), GST_TYPE_DASH_DEMUX_TEST_CASE))
+
+     static GstDashDemuxTestCase *gst_dash_demux_test_case_new (void)
+{
+  return g_object_newv (GST_TYPE_DASH_DEMUX_TEST_CASE, 0, NULL);
+}
+
+typedef struct _GstDashDemuxTestCaseClass
+{
+  GstAdaptiveDemuxTestCaseClass parent_class;
+} GstDashDemuxTestCaseClass;
+
+#define gst_dash_demux_test_case_parent_class parent_class
+
+G_DEFINE_TYPE (GstDashDemuxTestCase, gst_dash_demux_test_case,
+    GST_TYPE_ADAPTIVE_DEMUX_TEST_CASE);
+
+static void
+gst_dash_demux_test_case_class_init (GstDashDemuxTestCaseClass * klass)
+{
+  GObjectClass *object = G_OBJECT_CLASS (klass);
+
+  object->dispose = gst_dash_demux_test_case_dispose;
+  object->finalize = gst_dash_demux_test_case_finalize;
+}
+
+static void
+gst_dash_demux_test_case_init (GstDashDemuxTestCase * test_case)
+{
+  test_case->countContentProtectionEvents = NULL;
+  gst_dash_demux_test_case_clear (test_case);
+}
+
+static void
+gst_dash_demux_test_case_clear (GstDashDemuxTestCase * test_case)
+{
+  if (test_case->countContentProtectionEvents) {
+    gst_structure_free (test_case->countContentProtectionEvents);
+    test_case->countContentProtectionEvents = NULL;
+  }
+  if (test_case->availabilityStartTime) {
+    g_date_time_unref (test_case->availabilityStartTime);
+    test_case->availabilityStartTime = NULL;
+  }
+  test_case->timeshiftBufferDepth = -1;
+  test_case->clockCompensation = 0;
+}
+
+static void
+gst_dash_demux_test_case_dispose (GObject * object)
+{
+  GstDashDemuxTestCase *testData = GST_DASH_DEMUX_TEST_CASE (object);
+
+  gst_dash_demux_test_case_clear (testData);
+
+  G_OBJECT_CLASS (parent_class)->dispose (object);
+}
+
+static void
+gst_dash_demux_test_case_finalize (GObject * object)
+{
+  /*GstDashDemuxTestCase *testData = GST_DASH_DEMUX_TEST_CASE (object); */
+
+  G_OBJECT_CLASS (parent_class)->finalize (object);
+}
 
 static gboolean
 gst_dashdemux_http_src_start (GstTestHTTPSrc * src,
@@ -218,7 +320,7 @@ GST_START_TEST (simpleTest)
   GstTestHTTPSrcCallbacks http_src_callbacks = { 0 };
   GstTestHTTPSrcTestData http_src_test_data = { 0 };
   GstAdaptiveDemuxTestCallbacks test_callbacks = { 0 };
-  GstAdaptiveDemuxTestCase *testData;
+  GstDashDemuxTestCase *testData;
 
   http_src_callbacks.src_start = gst_dashdemux_http_src_start;
   http_src_callbacks.src_create = gst_dashdemux_http_src_create;
@@ -231,7 +333,7 @@ GST_START_TEST (simpleTest)
   test_callbacks.appsink_eos =
       gst_adaptive_demux_test_check_size_of_received_data;
 
-  testData = gst_adaptive_demux_test_case_new ();
+  testData = gst_dash_demux_test_case_new ();
   COPY_OUTPUT_TEST_DATA (outputTestData, testData);
 
   gst_adaptive_demux_test_run (DEMUX_ELEMENT_NAME, "http://unit.test/test.mpd",
@@ -343,7 +445,7 @@ GST_START_TEST (testTwoPeriods)
   GstTestHTTPSrcCallbacks http_src_callbacks = { 0 };
   GstTestHTTPSrcTestData http_src_test_data = { 0 };
   GstAdaptiveDemuxTestCallbacks test_callbacks = { 0 };
-  GstAdaptiveDemuxTestCase *testData;
+  GstDashDemuxTestCase *testData;
 
   http_src_callbacks.src_start = gst_dashdemux_http_src_start;
   http_src_callbacks.src_create = gst_dashdemux_http_src_create;
@@ -356,7 +458,7 @@ GST_START_TEST (testTwoPeriods)
   test_callbacks.appsink_eos =
       gst_adaptive_demux_test_check_size_of_received_data;
 
-  testData = gst_adaptive_demux_test_case_new ();
+  testData = gst_dash_demux_test_case_new ();
   COPY_OUTPUT_TEST_DATA (outputTestData, testData);
 
   gst_adaptive_demux_test_run (DEMUX_ELEMENT_NAME,
@@ -424,7 +526,7 @@ do \
 static void
 setAndTestDashParams (GstAdaptiveDemuxTestEngine * engine, gpointer user_data)
 {
-  /*  GstAdaptiveDemuxTestCase * testData = (GstAdaptiveDemuxTestCase*)user_data; */
+  /*  GstDashDemuxTestCase * testData = (GstDashDemuxTestCase*)user_data; */
   GObject *dashdemux = G_OBJECT (engine->demux);
 
   test_int_prop (dashdemux, "connection-speed", 1000);
@@ -487,7 +589,7 @@ GST_START_TEST (testParameters)
   GstTestHTTPSrcCallbacks http_src_callbacks = { 0 };
   GstTestHTTPSrcTestData http_src_test_data = { 0 };
   GstAdaptiveDemuxTestCallbacks test_callbacks = { 0 };
-  GstAdaptiveDemuxTestCase *testData;
+  GstDashDemuxTestCase *testData;
 
   http_src_callbacks.src_start = gst_dashdemux_http_src_start;
   http_src_callbacks.src_create = gst_dashdemux_http_src_create;
@@ -501,7 +603,7 @@ GST_START_TEST (testParameters)
   test_callbacks.appsink_eos =
       gst_adaptive_demux_test_check_size_of_received_data;
 
-  testData = gst_adaptive_demux_test_case_new ();
+  testData = gst_dash_demux_test_case_new ();
   COPY_OUTPUT_TEST_DATA (outputTestData, testData);
 
   gst_adaptive_demux_test_run (DEMUX_ELEMENT_NAME, "http://unit.test/test.mpd",
@@ -557,7 +659,7 @@ GST_START_TEST (testSeek)
   };
   GstTestHTTPSrcCallbacks http_src_callbacks = { 0 };
   GstTestHTTPSrcTestData http_src_test_data = { 0 };
-  GstAdaptiveDemuxTestCase *testData;
+  GstDashDemuxTestCase *testData;
 
   http_src_callbacks.src_start = gst_dashdemux_http_src_start;
   http_src_callbacks.src_create = gst_dashdemux_http_src_create;
@@ -565,7 +667,7 @@ GST_START_TEST (testSeek)
   gst_test_http_src_install_callbacks (&http_src_callbacks,
       &http_src_test_data);
 
-  testData = gst_adaptive_demux_test_case_new ();
+  testData = gst_dash_demux_test_case_new ();
   COPY_OUTPUT_TEST_DATA (outputTestData, testData);
 
   /* media segment starts at 4687
@@ -573,19 +675,19 @@ GST_START_TEST (testSeek)
    * on the first pad listed in GstAdaptiveDemuxTestOutputStreamData and the
    * first chunk of at least one byte has already arrived in AppSink
    */
-  testData->threshold_for_seek = 4687 + 1;
+  GST_ADAPTIVE_DEMUX_TEST_CASE (testData)->threshold_for_seek = 4687 + 1;
 
   /* seek to 5ms.
    * Because there is only one fragment, we expect the whole file to be
    * downloaded again
    */
-  testData->seek_event =
+  GST_ADAPTIVE_DEMUX_TEST_CASE (testData)->seek_event =
       gst_event_new_seek (1.0, GST_FORMAT_TIME,
       GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT, GST_SEEK_TYPE_SET,
       5 * GST_MSECOND, GST_SEEK_TYPE_NONE, 0);
 
   gst_adaptive_demux_test_seek (DEMUX_ELEMENT_NAME,
-      "http://unit.test/test.mpd", testData);
+      "http://unit.test/test.mpd", GST_ADAPTIVE_DEMUX_TEST_CASE (testData));
 
   gst_object_unref (testData);
   if (http_src_test_data.data)
@@ -647,7 +749,7 @@ run_seek_position_test (gdouble rate, guint64 seek_start, GstSeekType stop_type,
   };
   GstTestHTTPSrcCallbacks http_src_callbacks = { 0 };
   GstTestHTTPSrcTestData http_src_test_data = { 0 };
-  GstAdaptiveDemuxTestCase *testData;
+  GstDashDemuxTestCase *testData;
 
   http_src_callbacks.src_start = gst_dashdemux_http_src_start;
   http_src_callbacks.src_create = gst_dashdemux_http_src_create;
@@ -655,7 +757,7 @@ run_seek_position_test (gdouble rate, guint64 seek_start, GstSeekType stop_type,
   gst_test_http_src_install_callbacks (&http_src_callbacks,
       &http_src_test_data);
 
-  testData = gst_adaptive_demux_test_case_new ();
+  testData = gst_dash_demux_test_case_new ();
   COPY_OUTPUT_TEST_DATA (outputTestData, testData);
 
   /* media segment starts at 4687
@@ -663,7 +765,7 @@ run_seek_position_test (gdouble rate, guint64 seek_start, GstSeekType stop_type,
    * on the first pad listed in GstAdaptiveDemuxTestOutputStreamData and the
    * first chunk of at least one byte has already arrived in AppSink
    */
-  testData->threshold_for_seek = 4687 + 1;
+  GST_ADAPTIVE_DEMUX_TEST_CASE (testData)->threshold_for_seek = 4687 + 1;
 
   /* FIXME hack to avoid having a 0 seqnum */
   gst_util_seqnum_next ();
@@ -672,12 +774,12 @@ run_seek_position_test (gdouble rate, guint64 seek_start, GstSeekType stop_type,
    * Because there is only one fragment, we expect the whole file to be
    * downloaded again
    */
-  testData->seek_event =
+  GST_ADAPTIVE_DEMUX_TEST_CASE (testData)->seek_event =
       gst_event_new_seek (rate, GST_FORMAT_TIME, flags, GST_SEEK_TYPE_SET,
       seek_start, stop_type, seek_stop);
 
   gst_adaptive_demux_test_seek (DEMUX_ELEMENT_NAME,
-      "http://unit.test/test.mpd", testData);
+      "http://unit.test/test.mpd", GST_ADAPTIVE_DEMUX_TEST_CASE (testData));
 
   gst_object_unref (testData);
   if (http_src_test_data.data)
@@ -709,7 +811,7 @@ typedef struct _SeekTaskContext
 {
   GstAppSink *appsink;
   GstTask *task;
-  GstAdaptiveDemuxTestCase *testData;
+  GstDashDemuxTestCase *testData;
 } SeekTaskContext;
 
 /* function to generate a seek event. Will be run in a separate thread */
@@ -740,7 +842,8 @@ testParallelSeekTaskDoSeek2 (gpointer user_data)
 {
   SeekTaskContext *context = (SeekTaskContext *) user_data;
   GstTask *task = context->task;
-  GstAdaptiveDemuxTestCase *testData = context->testData;
+  GstAdaptiveDemuxTestCase *testData =
+      GST_ADAPTIVE_DEMUX_TEST_CASE (context->testData);
 
   GST_DEBUG ("testSeekTaskDoSeek calling seek");
 
@@ -811,7 +914,7 @@ testParallelSeekDashdemuxSendsData (GstAdaptiveDemuxTestEngine * engine,
 
     seekContext = g_slice_new (SeekTaskContext);
     seekContext->appsink = stream->appsink;
-    seekContext->testData = testData;
+    seekContext->testData = GST_DASH_DEMUX_TEST_CASE (testData);
     testData->test_task = seekContext->task =
         gst_task_new ((GstTaskFunction) testParallelSeekTaskDoSeek, seekContext,
         NULL);
@@ -894,7 +997,7 @@ testParallelSeekDashdemuxSendsEvent (GstAdaptiveDemuxTestEngine * engine,
     /* send the seek on the other stream appsink */
     seekContext->appsink = ((GstAdaptiveDemuxTestOutputStream *)
         g_ptr_array_index (engine->output_streams, 1))->appsink;
-    seekContext->testData = testData;
+    seekContext->testData = GST_DASH_DEMUX_TEST_CASE (testData);
     testData->test_task2 = seekContext->task =
         gst_task_new ((GstTaskFunction) testParallelSeekTaskDoSeek2,
         seekContext, NULL);
@@ -1086,7 +1189,7 @@ GST_START_TEST (testParallelSeek)
   GstTestHTTPSrcCallbacks http_src_callbacks = { 0 };
   GstTestHTTPSrcTestData http_src_test_data = { 0 };
   GstAdaptiveDemuxTestCallbacks test_callbacks = { 0 };
-  GstAdaptiveDemuxTestCase *testData;
+  GstDashDemuxTestCase *testData;
 
   http_src_callbacks.src_start = gst_dashdemux_http_src_start;
   http_src_callbacks.src_create = gst_dashdemux_http_src_create;
@@ -1103,7 +1206,7 @@ GST_START_TEST (testParallelSeek)
   test_callbacks.demux_sent_data = testParallelSeekDashdemuxSendsData;
   test_callbacks.demux_sent_event = testParallelSeekDashdemuxSendsEvent;
 
-  testData = gst_adaptive_demux_test_case_new ();
+  testData = gst_dash_demux_test_case_new ();
   COPY_OUTPUT_TEST_DATA (outputTestData, testData);
 
   gst_adaptive_demux_test_run (DEMUX_ELEMENT_NAME, "http://unit.test/test.mpd",
@@ -1175,7 +1278,7 @@ GST_START_TEST (testDownloadError)
   GstTestHTTPSrcCallbacks http_src_callbacks = { 0 };
   GstTestHTTPSrcTestData http_src_test_data = { 0 };
   GstAdaptiveDemuxTestCallbacks test_callbacks = { 0 };
-  GstAdaptiveDemuxTestCase *testData;
+  GstDashDemuxTestCase *testData;
 
   http_src_callbacks.src_start = gst_dashdemux_http_src_start;
   http_src_callbacks.src_create = gst_dashdemux_http_src_create;
@@ -1188,7 +1291,7 @@ GST_START_TEST (testDownloadError)
   test_callbacks.bus_error_message = testDownloadErrorMessageCallback;
   test_callbacks.appsink_eos = gst_adaptive_demux_test_unexpected_eos;
 
-  testData = gst_adaptive_demux_test_case_new ();
+  testData = gst_dash_demux_test_case_new ();
   COPY_OUTPUT_TEST_DATA (outputTestData, testData);
 
   gst_adaptive_demux_test_run (DEMUX_ELEMENT_NAME, "http://unit.test/test.mpd",
@@ -1280,7 +1383,7 @@ GST_START_TEST (testHeaderDownloadError)
   GstTestHTTPSrcCallbacks http_src_callbacks = { 0 };
   GstTestHTTPSrcTestData http_src_test_data = { 0 };
   GstAdaptiveDemuxTestCallbacks test_callbacks = { 0 };
-  GstAdaptiveDemuxTestCase *testData;
+  GstDashDemuxTestCase *testData;
 
   http_src_callbacks.src_start = gst_dashdemux_http_src_start;
   http_src_callbacks.src_create = test_fragment_download_error_src_create;
@@ -1296,7 +1399,7 @@ GST_START_TEST (testHeaderDownloadError)
   test_callbacks.appsink_eos = gst_adaptive_demux_test_unexpected_eos;
   test_callbacks.bus_error_message = testDownloadErrorMessageCallback;
 
-  testData = gst_adaptive_demux_test_case_new ();
+  testData = gst_dash_demux_test_case_new ();
   COPY_OUTPUT_TEST_DATA (outputTestData, testData);
 
   /* download in chunks of threshold_for_trigger size.
@@ -1367,7 +1470,7 @@ GST_START_TEST (testMediaDownloadErrorLastFragment)
   GstTestHTTPSrcCallbacks http_src_callbacks = { 0 };
   GstTestHTTPSrcTestData http_src_test_data = { 0 };
   GstAdaptiveDemuxTestCallbacks test_callbacks = { 0 };
-  GstAdaptiveDemuxTestCase *testData;
+  GstDashDemuxTestCase *testData;
 
   http_src_callbacks.src_start = gst_dashdemux_http_src_start;
   http_src_callbacks.src_create = test_fragment_download_error_src_create;
@@ -1383,7 +1486,7 @@ GST_START_TEST (testMediaDownloadErrorLastFragment)
   test_callbacks.appsink_eos =
       gst_adaptive_demux_test_check_size_of_received_data;
 
-  testData = gst_adaptive_demux_test_case_new ();
+  testData = gst_dash_demux_test_case_new ();
   COPY_OUTPUT_TEST_DATA (outputTestData, testData);
 
   gst_adaptive_demux_test_run (DEMUX_ELEMENT_NAME,
@@ -1453,7 +1556,7 @@ GST_START_TEST (testMediaDownloadErrorMiddleFragment)
   GstTestHTTPSrcCallbacks http_src_callbacks = { 0 };
   GstTestHTTPSrcTestData http_src_test_data = { 0 };
   GstAdaptiveDemuxTestCallbacks test_callbacks = { 0 };
-  GstAdaptiveDemuxTestCase *testData;
+  GstDashDemuxTestCase *testData;
 
   http_src_callbacks.src_start = gst_dashdemux_http_src_start;
   http_src_callbacks.src_create = test_fragment_download_error_src_create;
@@ -1469,7 +1572,7 @@ GST_START_TEST (testMediaDownloadErrorMiddleFragment)
   test_callbacks.appsink_eos = gst_adaptive_demux_test_unexpected_eos;
   test_callbacks.bus_error_message = testDownloadErrorMessageCallback;
 
-  testData = gst_adaptive_demux_test_case_new ();
+  testData = gst_dash_demux_test_case_new ();
   COPY_OUTPUT_TEST_DATA (outputTestData, testData);
 
   gst_adaptive_demux_test_run (DEMUX_ELEMENT_NAME,
@@ -1603,7 +1706,7 @@ GST_START_TEST (testQuery)
   GstTestHTTPSrcCallbacks http_src_callbacks = { 0 };
   GstTestHTTPSrcTestData http_src_test_data = { 0 };
   GstAdaptiveDemuxTestCallbacks test_callbacks = { 0 };
-  GstAdaptiveDemuxTestCase *testData;
+  GstDashDemuxTestCase *testData;
 
   http_src_callbacks.src_start = gst_dashdemux_http_src_start;
   http_src_callbacks.src_create = gst_dashdemux_http_src_create;
@@ -1615,7 +1718,7 @@ GST_START_TEST (testQuery)
   test_callbacks.appsink_eos =
       gst_adaptive_demux_test_check_size_of_received_data;
 
-  testData = gst_adaptive_demux_test_case_new ();
+  testData = gst_dash_demux_test_case_new ();
   COPY_OUTPUT_TEST_DATA (outputTestData, testData);
 
   gst_adaptive_demux_test_run (DEMUX_ELEMENT_NAME,
@@ -1633,8 +1736,7 @@ testContentProtectionDashdemuxSendsEvent (GstAdaptiveDemuxTestEngine * engine,
     GstAdaptiveDemuxTestOutputStream * stream,
     GstEvent * event, gpointer user_data)
 {
-  GstAdaptiveDemuxTestCase *test_case =
-      GST_ADAPTIVE_DEMUX_TEST_CASE (user_data);
+  GstDashDemuxTestCase *test_case = GST_DASH_DEMUX_TEST_CASE (user_data);
   const gchar *system_id;
   GstBuffer *data;
   const gchar *origin;
@@ -1772,7 +1874,7 @@ GST_START_TEST (testContentProtection)
   GstTestHTTPSrcCallbacks http_src_callbacks = { 0 };
   GstTestHTTPSrcTestData http_src_test_data = { 0 };
   GstAdaptiveDemuxTestCallbacks test_callbacks = { 0 };
-  GstAdaptiveDemuxTestCase *testData;
+  GstDashDemuxTestCase *testData;
   guint event_count = 0;
 
   http_src_callbacks.src_start = gst_dashdemux_http_src_start;
@@ -1787,7 +1889,7 @@ GST_START_TEST (testContentProtection)
       gst_adaptive_demux_test_check_size_of_received_data;
   test_callbacks.demux_sent_event = testContentProtectionDashdemuxSendsEvent;
 
-  testData = gst_adaptive_demux_test_case_new ();
+  testData = gst_dash_demux_test_case_new ();
   COPY_OUTPUT_TEST_DATA (outputTestData, testData);
   testData->countContentProtectionEvents =
       gst_structure_new_empty ("countContentProtectionEvents");
@@ -1814,11 +1916,14 @@ testLiveStreamCheckDataReceived (GstAdaptiveDemuxTestEngine *
     engine, GstAdaptiveDemuxTestOutputStream * stream, GstBuffer * buffer,
     gpointer user_data)
 {
-  GstAdaptiveDemuxTestCase *testData = GST_ADAPTIVE_DEMUX_TEST_CASE (user_data);
+  GstDashDemuxTestCase *testData = GST_DASH_DEMUX_TEST_CASE (user_data);
+  GstAdaptiveDemuxTestCase *commonData =
+      GST_ADAPTIVE_DEMUX_TEST_CASE (testData);
   GstAdaptiveDemuxTestExpectedOutput *testOutputStreamData;
 
   testOutputStreamData =
-      gst_adaptive_demux_test_find_test_data_by_stream (testData, stream, NULL);
+      gst_adaptive_demux_test_find_test_data_by_stream
+      (GST_ADAPTIVE_DEMUX_TEST_CASE (testData), stream, NULL);
   fail_unless (testOutputStreamData != NULL);
 
   gst_adaptive_demux_test_check_received_data (engine, stream, buffer,
@@ -1890,10 +1995,10 @@ testLiveStreamCheckDataReceived (GstAdaptiveDemuxTestEngine *
       gst_buffer_get_size (buffer) == testOutputStreamData->expected_size) {
 
     /* signal to the application that another stream has finished */
-    testData->count_of_finished_streams++;
+    commonData->count_of_finished_streams++;
 
-    if (testData->count_of_finished_streams ==
-        g_list_length (testData->output_streams)) {
+    if (commonData->count_of_finished_streams ==
+        g_list_length (commonData->output_streams)) {
       g_main_loop_quit (engine->loop);
     }
   }
@@ -1959,7 +2064,7 @@ GST_START_TEST (testLiveStream)
   GstTestHTTPSrcCallbacks http_src_callbacks = { 0 };
   GstTestHTTPSrcTestData http_src_test_data = { 0 };
   GstAdaptiveDemuxTestCallbacks test_callbacks = { 0 };
-  GstAdaptiveDemuxTestCase *testData;
+  GstDashDemuxTestCase *testData;
 
   availabilityStartTime = timeFromNow (-6);
   availabilityStartTimeString = toXSDateTime (availabilityStartTime);
@@ -1976,7 +2081,7 @@ GST_START_TEST (testLiveStream)
   test_callbacks.appsink_received_data = testLiveStreamCheckDataReceived;
   test_callbacks.appsink_eos = gst_adaptive_demux_test_unexpected_eos;
 
-  testData = gst_adaptive_demux_test_case_new ();
+  testData = gst_dash_demux_test_case_new ();
   COPY_OUTPUT_TEST_DATA (outputTestData, testData);
   testData->availabilityStartTime = availabilityStartTime;
 
@@ -1997,11 +2102,14 @@ testLiveStreamPresentationDelayCheckDataReceived (GstAdaptiveDemuxTestEngine *
     engine, GstAdaptiveDemuxTestOutputStream * stream, GstBuffer * buffer,
     gpointer user_data)
 {
-  GstAdaptiveDemuxTestCase *testData = GST_ADAPTIVE_DEMUX_TEST_CASE (user_data);
+  GstDashDemuxTestCase *testData = GST_DASH_DEMUX_TEST_CASE (user_data);
+  GstAdaptiveDemuxTestCase *commonData =
+      GST_ADAPTIVE_DEMUX_TEST_CASE (testData);
   GstAdaptiveDemuxTestExpectedOutput *testOutputStreamData;
 
   testOutputStreamData =
-      gst_adaptive_demux_test_find_test_data_by_stream (testData, stream, NULL);
+      gst_adaptive_demux_test_find_test_data_by_stream
+      (GST_ADAPTIVE_DEMUX_TEST_CASE (testData), stream, NULL);
   fail_unless (testOutputStreamData != NULL);
 
   gst_adaptive_demux_test_check_received_data (engine, stream, buffer,
@@ -2071,10 +2179,10 @@ testLiveStreamPresentationDelayCheckDataReceived (GstAdaptiveDemuxTestEngine *
       gst_buffer_get_size (buffer) == testOutputStreamData->expected_size) {
 
     /* signal to the application that another stream has finished */
-    testData->count_of_finished_streams++;
+    commonData->count_of_finished_streams++;
 
-    if (testData->count_of_finished_streams ==
-        g_list_length (testData->output_streams)) {
+    if (commonData->count_of_finished_streams ==
+        g_list_length (commonData->output_streams)) {
       g_main_loop_quit (engine->loop);
     }
   }
@@ -2140,7 +2248,7 @@ GST_START_TEST (testLiveStreamPresentationDelay)
   GstTestHTTPSrcCallbacks http_src_callbacks = { 0 };
   GstTestHTTPSrcTestData http_src_test_data = { 0 };
   GstAdaptiveDemuxTestCallbacks test_callbacks = { 0 };
-  GstAdaptiveDemuxTestCase *testData;
+  GstDashDemuxTestCase *testData;
 
   availabilityStartTime = timeFromNow (-6);
   availabilityStartTimeString = toXSDateTime (availabilityStartTime);
@@ -2158,7 +2266,7 @@ GST_START_TEST (testLiveStreamPresentationDelay)
       testLiveStreamPresentationDelayCheckDataReceived;
   test_callbacks.appsink_eos = gst_adaptive_demux_test_unexpected_eos;
 
-  testData = gst_adaptive_demux_test_case_new ();
+  testData = gst_dash_demux_test_case_new ();
   COPY_OUTPUT_TEST_DATA (outputTestData, testData);
   testData->availabilityStartTime = availabilityStartTime;
   testData->timeshiftBufferDepth = 5 * GST_SECOND;
@@ -2291,7 +2399,7 @@ GST_START_TEST (testQueryLiveStream)
   GstTestHTTPSrcCallbacks http_src_callbacks = { 0 };
   GstTestHTTPSrcTestData http_src_test_data = { 0 };
   GstAdaptiveDemuxTestCallbacks test_callbacks = { 0 };
-  GstAdaptiveDemuxTestCase *testData;
+  GstDashDemuxTestCase *testData;
 
   availabilityStartTime = timeFromNow (-6);
   availabilityStartTimeString = toXSDateTime (availabilityStartTime);
@@ -2308,7 +2416,7 @@ GST_START_TEST (testQueryLiveStream)
   test_callbacks.appsink_received_data = testQueryLiveStreamCheckDataReceived;
   test_callbacks.appsink_eos = gst_adaptive_demux_test_unexpected_eos;
 
-  testData = gst_adaptive_demux_test_case_new ();
+  testData = gst_dash_demux_test_case_new ();
   COPY_OUTPUT_TEST_DATA (outputTestData, testData);
   testData->availabilityStartTime = availabilityStartTime;
 
@@ -2329,11 +2437,14 @@ testSeekLiveStreamCheckDataReceived (GstAdaptiveDemuxTestEngine * engine,
     GstAdaptiveDemuxTestOutputStream * stream,
     GstBuffer * buffer, gpointer user_data)
 {
-  GstAdaptiveDemuxTestCase *testData = GST_ADAPTIVE_DEMUX_TEST_CASE (user_data);
+  GstDashDemuxTestCase *testData = GST_DASH_DEMUX_TEST_CASE (user_data);
+  GstAdaptiveDemuxTestCase *commonData =
+      GST_ADAPTIVE_DEMUX_TEST_CASE (testData);
   GstAdaptiveDemuxTestExpectedOutput *testOutputStreamData;
 
   testOutputStreamData =
-      gst_adaptive_demux_test_find_test_data_by_stream (testData, stream, NULL);
+      gst_adaptive_demux_test_find_test_data_by_stream
+      (GST_ADAPTIVE_DEMUX_TEST_CASE (testData), stream, NULL);
   fail_unless (testOutputStreamData != NULL);
 
   gst_adaptive_demux_test_check_received_data (engine, stream, buffer,
@@ -2384,13 +2495,13 @@ testSeekLiveStreamCheckDataReceived (GstAdaptiveDemuxTestEngine * engine,
        * See https://bugzilla.gnome.org/show_bug.cgi?id=753751
        */
       fail_unless (segment_end > 9 * GST_SECOND && segment_end < streamTime);
-    } else if (stream->total_received_size == testData->threshold_for_seek) {
+    } else if (stream->total_received_size == commonData->threshold_for_seek) {
       /* this is the first segment that is downloaded after seek.
        * It should be segment 1.
        */
       fail_unless (segment_end > 9 * GST_SECOND && segment_end < streamTime);
     } else if (stream->total_received_size ==
-        testData->threshold_for_seek + 1000) {
+        commonData->threshold_for_seek + 1000) {
       /* this is the second segment that is downloaded after seek.
        * It should be segment 2.
        * It is already available, so it is downloaded immediately after
@@ -2411,10 +2522,10 @@ testSeekLiveStreamCheckDataReceived (GstAdaptiveDemuxTestEngine * engine,
       gst_buffer_get_size (buffer) == testOutputStreamData->expected_size) {
 
     /* signal to the application that another stream has finished */
-    testData->count_of_finished_streams++;
+    commonData->count_of_finished_streams++;
 
-    if (testData->count_of_finished_streams ==
-        g_list_length (testData->output_streams)) {
+    if (commonData->count_of_finished_streams ==
+        g_list_length (commonData->output_streams)) {
       g_main_loop_quit (engine->loop);
     }
   }
@@ -2524,7 +2635,7 @@ GST_START_TEST (testSeekLiveStream)
   GstTestHTTPSrcCallbacks http_src_callbacks = { 0 };
   GstTestHTTPSrcTestData http_src_test_data = { 0 };
   GstAdaptiveDemuxTestCallbacks test_callbacks = { 0 };
-  GstAdaptiveDemuxTestCase *testData;
+  GstDashDemuxTestCase *testData;
 
   availabilityStartTime = timeFromNow (-6);
   availabilityStartTimeString = toXSDateTime (availabilityStartTime);
@@ -2544,7 +2655,7 @@ GST_START_TEST (testSeekLiveStream)
   test_callbacks.post_test = testSeekPostTestCallback;
   test_callbacks.demux_sent_data = testSeekAdaptiveDemuxSendsData;
 
-  testData = gst_adaptive_demux_test_case_new ();
+  testData = gst_dash_demux_test_case_new ();
   COPY_OUTPUT_TEST_DATA (outputTestData, testData);
 
   testData->availabilityStartTime = availabilityStartTime;
@@ -2554,13 +2665,13 @@ GST_START_TEST (testSeekLiveStream)
    * on audio_00 stream and the first chunk of GST_FAKE_SOUP_HTTP_SRC_MAX_BUF_SIZE
    * has already arrived in AppSink
    */
-  testData->threshold_for_seek = 1;
+  GST_ADAPTIVE_DEMUX_TEST_CASE (testData)->threshold_for_seek = 1;
 
   /* seek to 5ms.
    * Because there is only one fragment, we expect the whole file to be
    * downloaded again
    */
-  testData->seek_event =
+  GST_ADAPTIVE_DEMUX_TEST_CASE (testData)->seek_event =
       gst_event_new_seek (1.0, GST_FORMAT_TIME,
       GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT, GST_SEEK_TYPE_SET,
       5 * GST_MSECOND, GST_SEEK_TYPE_NONE, 0);
@@ -2575,7 +2686,7 @@ GST_START_TEST (testSeekLiveStream)
   gst_test_http_src_set_default_blocksize (1024);
 
   gst_adaptive_demux_test_run (DEMUX_ELEMENT_NAME, "http://unit.test/test.mpd",
-      &test_callbacks, testData);
+      &test_callbacks, GST_ADAPTIVE_DEMUX_TEST_CASE (testData));
 
   gst_object_unref (testData);
   if (http_src_test_data.data)
@@ -2592,11 +2703,14 @@ testClockCompensationCheckDataReceived (GstAdaptiveDemuxTestEngine * engine,
     GstAdaptiveDemuxTestOutputStream * stream,
     GstBuffer * buffer, gpointer user_data)
 {
-  GstAdaptiveDemuxTestCase *testData = GST_ADAPTIVE_DEMUX_TEST_CASE (user_data);
+  GstDashDemuxTestCase *testData = GST_DASH_DEMUX_TEST_CASE (user_data);
+  GstAdaptiveDemuxTestCase *commonData =
+      GST_ADAPTIVE_DEMUX_TEST_CASE (testData);
   GstAdaptiveDemuxTestExpectedOutput *testOutputStreamData;
 
   testOutputStreamData =
-      gst_adaptive_demux_test_find_test_data_by_stream (testData, stream, NULL);
+      gst_adaptive_demux_test_find_test_data_by_stream (commonData, stream,
+      NULL);
   fail_unless (testOutputStreamData != NULL);
 
   gst_adaptive_demux_test_check_received_data (engine, stream, buffer,
@@ -2661,10 +2775,10 @@ testClockCompensationCheckDataReceived (GstAdaptiveDemuxTestEngine * engine,
       gst_buffer_get_size (buffer) == testOutputStreamData->expected_size) {
 
     /* signal to the application that another stream has finished */
-    testData->count_of_finished_streams++;
+    commonData->count_of_finished_streams++;
 
-    if (testData->count_of_finished_streams ==
-        g_list_length (testData->output_streams)) {
+    if (commonData->count_of_finished_streams ==
+        g_list_length (commonData->output_streams)) {
       g_main_loop_quit (engine->loop);
     }
   }
@@ -2804,7 +2918,7 @@ GST_START_TEST (testClockCompensationHttpXSdate)
   GstTestHTTPSrcCallbacks http_src_callbacks = { 0 };
   GstTestHTTPSrcTestData http_src_test_data = { 0 };
   GstAdaptiveDemuxTestCallbacks test_callbacks = { 0 };
-  GstAdaptiveDemuxTestCase *testData;
+  GstDashDemuxTestCase *testData;
 
   availabilityStartTime = timeFromNow (-6);
   availabilityStartTimeString = toXSDateTime (availabilityStartTime);
@@ -2822,7 +2936,7 @@ GST_START_TEST (testClockCompensationHttpXSdate)
   test_callbacks.appsink_received_data = testClockCompensationCheckDataReceived;
   test_callbacks.appsink_eos = gst_adaptive_demux_test_unexpected_eos;
 
-  testData = gst_adaptive_demux_test_case_new ();
+  testData = gst_dash_demux_test_case_new ();
   COPY_OUTPUT_TEST_DATA (outputTestData, testData);
   testData->availabilityStartTime = availabilityStartTime;
   testData->clockCompensation = 3;      /* server is 3s ahead */
@@ -2934,7 +3048,7 @@ GST_START_TEST (testClockCompensationHttpHead)
   GstTestHTTPSrcCallbacks http_src_callbacks = { 0 };
   GstTestHTTPSrcTestData http_src_test_data = { 0 };
   GstAdaptiveDemuxTestCallbacks test_callbacks = { 0 };
-  GstAdaptiveDemuxTestCase *testData;
+  GstDashDemuxTestCase *testData;
 
   availabilityStartTime = timeFromNow (-6);
   availabilityStartTimeString = toXSDateTime (availabilityStartTime);
@@ -2951,7 +3065,7 @@ GST_START_TEST (testClockCompensationHttpHead)
   test_callbacks.appsink_received_data = testClockCompensationCheckDataReceived;
   test_callbacks.appsink_eos = gst_adaptive_demux_test_unexpected_eos;
 
-  testData = gst_adaptive_demux_test_case_new ();
+  testData = gst_dash_demux_test_case_new ();
   COPY_OUTPUT_TEST_DATA (outputTestData, testData);
   testData->availabilityStartTime = availabilityStartTime;
   testData->clockCompensation = 4;      /* server is 3-4s ahead */
@@ -3034,7 +3148,7 @@ GST_START_TEST (testClockCompensationHttpNtp)
   GstTestHTTPSrcCallbacks http_src_callbacks = { 0 };
   GstTestHTTPSrcTestData http_src_test_data = { 0 };
   GstAdaptiveDemuxTestCallbacks test_callbacks = { 0 };
-  GstAdaptiveDemuxTestCase *testData;
+  GstDashDemuxTestCase *testData;
 
   availabilityStartTime = timeFromNow (-6);
   availabilityStartTimeString = toXSDateTime (availabilityStartTime);
@@ -3052,7 +3166,7 @@ GST_START_TEST (testClockCompensationHttpNtp)
   test_callbacks.appsink_received_data = testClockCompensationCheckDataReceived;
   test_callbacks.appsink_eos = gst_adaptive_demux_test_unexpected_eos;
 
-  testData = gst_adaptive_demux_test_case_new ();
+  testData = gst_dash_demux_test_case_new ();
   COPY_OUTPUT_TEST_DATA (outputTestData, testData);
   testData->availabilityStartTime = availabilityStartTime;
   testData->clockCompensation = 3;      /* server is 3s ahead */
