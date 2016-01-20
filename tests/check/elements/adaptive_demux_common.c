@@ -159,6 +159,39 @@ gst_adaptive_demux_test_case_new (void)
   return g_object_newv (GST_TYPE_ADAPTIVE_DEMUX_TEST_CASE, 0, NULL);
 }
 
+void
+gst_adaptive_demux_test_barrier_init (GstAdaptiveDemuxTestBarrier * barrier,
+    guint runners)
+{
+  g_cond_init (&barrier->condition);
+  g_mutex_init (&barrier->mutex);
+  barrier->count = 0;
+  barrier->runners = runners;
+}
+
+void
+gst_adaptive_demux_test_barrier_clear (GstAdaptiveDemuxTestBarrier * barrier)
+{
+  g_cond_clear (&barrier->condition);
+  g_mutex_clear (&barrier->mutex);
+  barrier->count = 0;
+  barrier->runners = 0;
+}
+
+void
+gst_adaptive_demux_test_barrier_wait (GstAdaptiveDemuxTestBarrier * barrier)
+{
+  g_mutex_lock (&barrier->mutex);
+  ++barrier->count;
+  if (barrier->count == barrier->runners) {
+    g_cond_broadcast (&barrier->condition);
+  } else {
+    while (barrier->count != barrier->runners) {
+      g_cond_wait (&barrier->condition, &barrier->mutex);
+    }
+  }
+  g_mutex_unlock (&barrier->mutex);
+}
 
 GstAdaptiveDemuxTestExpectedOutput *
 gst_adaptive_demux_test_find_test_data_by_stream (GstAdaptiveDemuxTestCase *
