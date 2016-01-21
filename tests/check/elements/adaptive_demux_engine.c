@@ -465,8 +465,6 @@ start_pipeline_playing (gpointer user_data)
       gst_element_set_state (priv->engine.pipeline, GST_STATE_PLAYING);
   fail_unless (stateChange != GST_STATE_CHANGE_FAILURE);
   GST_DEBUG ("PLAYING stateChange = %d", stateChange);
-  priv->clock_update_id =
-      g_timeout_add (100, gst_adaptive_demux_update_test_clock, priv);
   return FALSE;
 }
 
@@ -500,8 +498,6 @@ gst_adaptive_demux_test_run (const gchar * element_name,
   GST_DEBUG ("created pipeline %" GST_PTR_FORMAT, priv->engine.pipeline);
 
   GST_TEST_LOCK (&priv->engine);
-  priv->engine.clock = gst_test_clock_new ();
-  gst_system_clock_set_default (priv->engine.clock);
 
   /* register a callback to listen for error messages */
   bus = gst_pipeline_get_bus (GST_PIPELINE (priv->engine.pipeline));
@@ -532,6 +528,20 @@ gst_adaptive_demux_test_run (const gchar * element_name,
 
   ret = gst_element_link (manifest_source, demux);
   fail_unless_equals_int (ret, TRUE);
+
+  priv->engine.clock = gst_system_clock_obtain ();
+  if (GST_IS_TEST_CLOCK (priv->engine.clock)) {
+    /*
+     * live tests will want to manipulate the clock, so they will register a
+     * gst_test_clock as the system clock.
+     * The on demand tests do not care about the clock, so they will let the
+     * system clock to the default one.
+     * If a gst_test_clock was installed as system clock, we register a
+     * periodic callback to update its value.
+     */
+    priv->clock_update_id =
+        g_timeout_add (100, gst_adaptive_demux_update_test_clock, priv);
+  }
 
   /* call a test callback before we start the pipeline */
   if (callbacks->pre_test)
@@ -575,8 +585,8 @@ gst_adaptive_demux_test_run (const gchar * element_name,
       priv);
 
   GST_DEBUG ("main thread pipeline stopped");
-  fail_unless (priv->clock_update_id != 0);
-  g_source_remove (priv->clock_update_id);
+  if (priv->clock_update_id != 0)
+    g_source_remove (priv->clock_update_id);
   gst_system_clock_set_default (NULL);
   gst_object_unref (priv->engine.clock);
   gst_object_unref (priv->engine.pipeline);
