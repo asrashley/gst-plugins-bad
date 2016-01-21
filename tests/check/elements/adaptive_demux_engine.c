@@ -429,19 +429,15 @@ gst_adaptive_demux_update_test_clock (gpointer user_data)
   GstClockTime next_entry;
   GstTestClock *clock = GST_TEST_CLOCK (priv->engine.clock);
 
-  if (clock) {
-    next_entry = gst_test_clock_get_next_entry_time (clock);
-    if (next_entry != GST_CLOCK_TIME_NONE) {
-      gst_test_clock_set_time (clock, next_entry);
-    }
+  fail_unless (clock != NULL);
+  next_entry = gst_test_clock_get_next_entry_time (clock);
+  if (next_entry != GST_CLOCK_TIME_NONE) {
+    gst_test_clock_set_time (clock, next_entry);
     id = gst_test_clock_process_next_clock_id (clock);
-    if (id) {
-      gst_clock_id_unref (id);
-    }
-    return TRUE;
+    fail_unless (id != NULL);
+    gst_clock_id_unref (id);
   }
-  priv->clock_update_id = 0;
-  return FALSE;
+  return TRUE;
 }
 
 static gboolean
@@ -566,10 +562,9 @@ gst_adaptive_demux_test_run (const gchar * element_name,
       priv);
 
   GST_DEBUG ("main thread pipeline stopped");
+  fail_unless (priv->clock_update_id != 0);
+  g_source_remove (priv->clock_update_id);
   gst_system_clock_set_default (NULL);
-  if (priv->clock_update_id) {
-    g_source_remove (priv->clock_update_id);
-  }
   gst_object_unref (priv->engine.clock);
   gst_object_unref (priv->engine.pipeline);
   priv->engine.pipeline = NULL;
