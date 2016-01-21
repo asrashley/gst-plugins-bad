@@ -433,10 +433,22 @@ gst_adaptive_demux_update_test_clock (gpointer user_data)
   fail_unless (clock != NULL);
   next_entry = gst_test_clock_get_next_entry_time (clock);
   if (next_entry != GST_CLOCK_TIME_NONE) {
-    gst_test_clock_set_time (clock, next_entry);
-    id = gst_test_clock_process_next_clock_id (clock);
-    fail_unless (id != NULL);
-    gst_clock_id_unref (id);
+    /* tests that do not want the manifest to update will set the update period
+     * to a big value, eg 500s. The manifest update task will register an alarm
+     * for that value.
+     * We do not want the clock to jump to that. If it does, the manifest update
+     * task will keep scheduling and use all the cpu power, starving the other
+     * threads.
+     * Usually the test require the clock to update with approx 3s, so we will
+     * allow only updates smaller than 100s
+     */
+    GstClockTime curr_time = gst_clock_get_time (GST_CLOCK (clock));
+    if (next_entry - curr_time < 100 * GST_SECOND) {
+      gst_test_clock_set_time (clock, next_entry);
+      id = gst_test_clock_process_next_clock_id (clock);
+      fail_unless (id != NULL);
+      gst_clock_id_unref (id);
+    }
   }
   return TRUE;
 }
