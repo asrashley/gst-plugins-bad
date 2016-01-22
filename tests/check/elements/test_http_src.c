@@ -347,20 +347,6 @@ gst_test_http_src_start (GstBaseSrc * basesrc)
         "Connection", G_TYPE_STRING,
         src->keep_alive ? "keep-alive" : "close", NULL);
   }
-  if (!gst_structure_has_field_typed (src->input.response_headers,
-          "Date", G_TYPE_STRING)) {
-    GDateTime *now;
-    gchar *date_str;
-
-    now = g_date_time_new_now_local ();
-    fail_unless (now != NULL);
-    date_str = g_date_time_format (now, "%a, %e %b %Y %T %Z");
-    fail_unless (date_str != NULL);
-    gst_structure_set (src->input.response_headers,
-        "Date", G_TYPE_STRING, date_str, NULL);
-    g_free (date_str);
-    g_date_time_unref (now);
-  }
   gst_structure_set (http_headers, TEST_HTTP_SRC_RESPONSE_HEADERS_NAME,
       GST_TYPE_STRUCTURE, src->input.response_headers, NULL);
   if (src->http_headers_event) {
