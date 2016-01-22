@@ -2096,11 +2096,8 @@ testLiveStreamCheckDataReceived (GstAdaptiveDemuxTestEngine *
  * There are 4 segments, 3s each.
  * We set the mpd availability 6s before now.
  * We expect to download the last 2 segments, and to wait for the first one to
- * be available, so the test should take a little over 6s.
+ * be available.
  *
- * Do not reduce the segment duration! When running under valgrind, the test
- * will execute slower and dash demux might seek to a different segment
- * when the manifest is received and the wallclock time is read.
  */
 GST_START_TEST (testLiveStream)
 {
@@ -2447,11 +2444,8 @@ testQueryLiveStreamCheckDataReceived (GstAdaptiveDemuxTestEngine *
  * There are 4 segments, 3s each.
  * We set the mpd availability 6s before now.
  * We expect to download the last 2 segments, and to wait for the first one to
- * be available, so the test should take a little over 6s.
+ * be available
  *
- * Do not reduce the segment duration! When running under valgrind, the test
- * will execute slower and dash demux might seek to a different segment
- * when the manifest is received and the wallclock time is read.
  */
 GST_START_TEST (testQueryLiveStream)
 {
@@ -2655,40 +2649,6 @@ testSeekLiveStreamCheckDataReceived (GstAdaptiveDemuxTestEngine * engine,
  * the beginning of the stream. The test will wait for the first 2 segments
  * to be downloaded and then will terminate.
  *
- * Test timeline:
- * Let x be a small duration (usually a few ms, can be 1-2s in case the test
- * is run under Valgrind or on a busy system). In order to have a reliable test,
- * x must be less than the segment duration (3s).
- * We define "test time" the number of seconds since the test started. This is
- * the equivalent of wall clock time.
- * We define "stream time" the live stream position at test time.
- * Because availabilityStartTime is 6s before now, the following holds
- * for the duration of the test:
- *    test time + 6s = stream time
- *
- * Test time   Stream time   Event
- * 0.x         6.x           test starts.
- *                           MPD is downloaded.
- *                           Adaptive demux seeks to current segment (segment 3).
- *                           Adaptive demux waits for segment 3 to be available.
- *
- * 3.x         9.x           Segment 3 starts to be downloaded.
- *                           Segment 3 starts playing.
- *                           After the second chunk is received, the test seeks
- *                           to 0s. That is segment 1.
- *                           Segment 1 download begins.
- *                           Segment 1 starts playing.
- *                           Segment 1 download finishes.
- *                           Segment 1 play finishes.
- *                           Segment 2 download begins.
- *                           Segment 2 starts playing.
- *                           Segment 2 download finishes.
- *                           Segment 2 play finishes.
- *                           The test finishes.
- *
- * Do not reduce the segment duration! When running under valgrind, the test
- * will execute slower and dash demux might seek to a different segment
- * when the manifest is received and the wallclock time is read.
  */
 GST_START_TEST (testSeekLiveStream)
 {
@@ -2910,11 +2870,8 @@ testClockCompensationCheckDataReceived (GstAdaptiveDemuxTestEngine * engine,
  * The server is 3s ahead of the client, which means it is currently generating
  * segment 4.
  * We expect the client to download segment 4 and to wait for it to
- * be available, so the test should take a little over 3s.
+ * be available.
  *
- * Do not reduce the segment duration! When running under valgrind, the test
- * will execute slower and dash demux might seek to a different segment
- * when the manifest is received and the wallclock time is read.
  */
 GST_START_TEST (testClockCompensationHttpXSdate)
 {
@@ -3045,11 +3002,8 @@ testClockCompensationHttpHead_http_src_start (GstTestHTTPSrc * src,
  * milliseconds, so its precision is 1s), which means it is currently generating
  * segment 4.
  * We expect the client to download segment 4 and to wait for it to
- * be available, so the test should take a little over 3s.
+ * be available
  *
- * Do not reduce the segment duration! When running under valgrind, the test
- * will execute slower and dash demux might seek to a different segment
- * when the manifest is received and the wallclock time is read.
  */
 GST_START_TEST (testClockCompensationHttpHead)
 {
@@ -3145,16 +3099,13 @@ GST_END_TEST;
  * The server is 3s ahead of the client, which means it is currently generating
  * segment 4.
  * We expect the client to download segment 4 and to wait for it to
- * be available, so the test should take a little over 3s.
+ * be available.
  *
  * The mpd also contains an xsdate UTC timing scheme, but its address is not
  * configured in inputTestData so the fake http src element will not reply
  * to that address. Adaptive demux should attempt to use the second
  * UTC timing scheme (the HTTP NTP server).
  *
- * Do not reduce the segment duration! When running under valgrind, the test
- * will execute slower and dash demux might seek to a different segment
- * when the manifest is received and the wallclock time is read.
  */
 GST_START_TEST (testClockCompensationHttpNtp)
 {
@@ -3249,9 +3200,6 @@ dash_demux_suite (void)
   Suite *s = suite_create ("dash_demux");
   TCase *tc_basicTests = tcase_create ("basicTests");
   TCase *tc_liveTests = tcase_create ("liveTests");
-
-  /* longest test is testSeekLiveStream which takes 6s to run */
-  tcase_set_timeout (tc_liveTests, 8);
 
   tcase_add_test (tc_basicTests, simpleTest);
   tcase_add_test (tc_basicTests, testTwoPeriods);
