@@ -622,9 +622,6 @@ gst_dash_demux_setup_all_streams (GstDashDemux * demux)
           (stream), tags);
     stream->index = i;
     stream->pending_seek_ts = GST_CLOCK_TIME_NONE;
-    if (active_stream->cur_representation)
-      GST_ADAPTIVE_DEMUX_STREAM_CAST (stream)->currently_selected_rate =
-          active_stream->cur_representation->bandwidth;
     if (active_stream->cur_adapt_set &&
         active_stream->cur_adapt_set->RepresentationBase &&
         active_stream->cur_adapt_set->RepresentationBase->ContentProtection) {
