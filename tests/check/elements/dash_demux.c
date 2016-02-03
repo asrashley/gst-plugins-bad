@@ -423,7 +423,7 @@ GST_START_TEST (simpleTest)
   gst_adaptive_demux_test_run (DEMUX_ELEMENT_NAME, "http://unit.test/test.mpd",
       &test_callbacks, testData);
 
-  gst_object_unref (testData);
+  g_object_unref (testData);
   if (http_src_test_data.data)
     gst_structure_free (http_src_test_data.data);
 }
@@ -548,7 +548,7 @@ GST_START_TEST (testTwoPeriods)
   gst_adaptive_demux_test_run (DEMUX_ELEMENT_NAME,
       "http://unit.test/test.mpd", &test_callbacks, testData);
 
-  gst_object_unref (testData);
+  g_object_unref (testData);
   if (http_src_test_data.data)
     gst_structure_free (http_src_test_data.data);
 }
@@ -693,7 +693,7 @@ GST_START_TEST (testParameters)
   gst_adaptive_demux_test_run (DEMUX_ELEMENT_NAME, "http://unit.test/test.mpd",
       &test_callbacks, testData);
 
-  gst_object_unref (testData);
+  g_object_unref (testData);
   if (http_src_test_data.data)
     gst_structure_free (http_src_test_data.data);
 }
@@ -773,7 +773,7 @@ GST_START_TEST (testSeek)
   gst_adaptive_demux_test_seek (DEMUX_ELEMENT_NAME,
       "http://unit.test/test.mpd", GST_ADAPTIVE_DEMUX_TEST_CASE (testData));
 
-  gst_object_unref (testData);
+  g_object_unref (testData);
   if (http_src_test_data.data)
     gst_structure_free (http_src_test_data.data);
 }
@@ -865,7 +865,7 @@ run_seek_position_test (gdouble rate, guint64 seek_start, GstSeekType stop_type,
   gst_adaptive_demux_test_seek (DEMUX_ELEMENT_NAME,
       "http://unit.test/test.mpd", GST_ADAPTIVE_DEMUX_TEST_CASE (testData));
 
-  gst_object_unref (testData);
+  g_object_unref (testData);
   if (http_src_test_data.data)
     gst_structure_free (http_src_test_data.data);
 }
@@ -1296,7 +1296,7 @@ GST_START_TEST (testParallelSeek)
   gst_adaptive_demux_test_run (DEMUX_ELEMENT_NAME, "http://unit.test/test.mpd",
       &test_callbacks, testData);
 
-  gst_object_unref (testData);
+  g_object_unref (testData);
   if (http_src_test_data.data)
     gst_structure_free (http_src_test_data.data);
 }
@@ -1381,7 +1381,7 @@ GST_START_TEST (testDownloadError)
   gst_adaptive_demux_test_run (DEMUX_ELEMENT_NAME, "http://unit.test/test.mpd",
       &test_callbacks, testData);
 
-  gst_object_unref (testData);
+  g_object_unref (testData);
   if (http_src_test_data.data)
     gst_structure_free (http_src_test_data.data);
 }
@@ -1495,7 +1495,7 @@ GST_START_TEST (testHeaderDownloadError)
   gst_adaptive_demux_test_run (DEMUX_ELEMENT_NAME,
       "http://unit.test/test.mpd", &test_callbacks, testData);
 
-  gst_object_unref (testData);
+  g_object_unref (testData);
   if (http_src_test_data.data)
     gst_structure_free (http_src_test_data.data);
 }
@@ -1576,7 +1576,7 @@ GST_START_TEST (testMediaDownloadErrorLastFragment)
   gst_adaptive_demux_test_run (DEMUX_ELEMENT_NAME,
       "http://unit.test/test.mpd", &test_callbacks, testData);
 
-  gst_object_unref (testData);
+  g_object_unref (testData);
   if (http_src_test_data.data)
     gst_structure_free (http_src_test_data.data);
 }
@@ -1662,7 +1662,7 @@ GST_START_TEST (testMediaDownloadErrorMiddleFragment)
   gst_adaptive_demux_test_run (DEMUX_ELEMENT_NAME,
       "http://unit.test/test.mpd", &test_callbacks, testData);
 
-  gst_object_unref (testData);
+  g_object_unref (testData);
   if (http_src_test_data.data)
     gst_structure_free (http_src_test_data.data);
 }
@@ -1808,7 +1808,7 @@ GST_START_TEST (testQuery)
   gst_adaptive_demux_test_run (DEMUX_ELEMENT_NAME,
       "http://unit.test/test.mpd", &test_callbacks, testData);
 
-  gst_object_unref (testData);
+  g_object_unref (testData);
   if (http_src_test_data.data)
     gst_structure_free (http_src_test_data.data);
 }
@@ -1987,7 +1987,7 @@ GST_START_TEST (testContentProtection)
       &event_count);
   fail_unless (event_count == 2);
 
-  gst_object_unref (testData);
+  g_object_unref (testData);
   if (http_src_test_data.data)
     gst_structure_free (http_src_test_data.data);
 }
@@ -2176,7 +2176,7 @@ GST_START_TEST (testLiveStream)
   gst_adaptive_demux_test_run (DEMUX_ELEMENT_NAME, "http://unit.test/test.mpd",
       &test_callbacks, testData);
 
-  gst_object_unref (testData);
+  g_object_unref (testData);
   if (http_src_test_data.data)
     gst_structure_free (http_src_test_data.data);
   g_free (mpd);
@@ -2370,7 +2370,7 @@ GST_START_TEST (testLiveStreamPresentationDelay)
   gst_adaptive_demux_test_run (DEMUX_ELEMENT_NAME, "http://unit.test/test.mpd",
       &test_callbacks, testData);
 
-  gst_object_unref (testData);
+  g_object_unref (testData);
   if (http_src_test_data.data)
     gst_structure_free (http_src_test_data.data);
   g_free (mpd);
@@ -2524,7 +2524,7 @@ GST_START_TEST (testQueryLiveStream)
   gst_adaptive_demux_test_run (DEMUX_ELEMENT_NAME, "http://unit.test/test.mpd",
       &test_callbacks, testData);
 
-  gst_object_unref (testData);
+  g_object_unref (testData);
   if (http_src_test_data.data)
     gst_structure_free (http_src_test_data.data);
   g_free (mpd);
@@ -2763,7 +2763,7 @@ GST_START_TEST (testSeekLiveStream)
   gst_adaptive_demux_test_run (DEMUX_ELEMENT_NAME, "http://unit.test/test.mpd",
       &test_callbacks, GST_ADAPTIVE_DEMUX_TEST_CASE (testData));
 
-  gst_object_unref (testData);
+  g_object_unref (testData);
   if (http_src_test_data.data)
     gst_structure_free (http_src_test_data.data);
   g_free (mpd);
@@ -2951,7 +2951,7 @@ GST_START_TEST (testClockCompensationHttpXSdate)
   gst_adaptive_demux_test_run (DEMUX_ELEMENT_NAME, "http://unit.test/test.mpd",
       &test_callbacks, testData);
 
-  gst_object_unref (testData);
+  g_object_unref (testData);
   if (http_src_test_data.data)
     gst_structure_free (http_src_test_data.data);
   g_free (mpd);
@@ -3082,7 +3082,7 @@ GST_START_TEST (testClockCompensationHttpHead)
   gst_adaptive_demux_test_run (DEMUX_ELEMENT_NAME, "http://unit.test/test.mpd",
       &test_callbacks, testData);
 
-  gst_object_unref (testData);
+  g_object_unref (testData);
   if (http_src_test_data.data)
     gst_structure_free (http_src_test_data.data);
   g_free (mpd);
@@ -3185,7 +3185,7 @@ GST_START_TEST (testClockCompensationHttpNtp)
   gst_adaptive_demux_test_run (DEMUX_ELEMENT_NAME, "http://unit.test/test.mpd",
       &test_callbacks, testData);
 
-  gst_object_unref (testData);
+  g_object_unref (testData);
   if (http_src_test_data.data)
     gst_structure_free (http_src_test_data.data);
   g_free (mpd);
