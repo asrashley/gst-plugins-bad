@@ -587,7 +587,6 @@ gst_adaptive_demux_test_run (const gchar * element_name,
   GST_DEBUG ("main thread pipeline stopped");
   if (priv->clock_update_id != 0)
     g_source_remove (priv->clock_update_id);
-  gst_system_clock_set_default (NULL);
   gst_object_unref (priv->engine.clock);
   gst_object_unref (priv->engine.pipeline);
   priv->engine.pipeline = NULL;
