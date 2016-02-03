@@ -458,8 +458,6 @@ gst_mss_demux_setup_streams (GstAdaptiveDemux * demux)
     gst_adaptive_demux_stream_set_caps (GST_ADAPTIVE_DEMUX_STREAM_CAST (stream),
         create_mss_caps (stream, caps));
     gst_caps_unref (caps);
-    stream->parent.currently_selected_rate =
-        gst_mss_stream_get_current_bitrate (stream->manifest_stream);
 
     lang = gst_mss_stream_get_lang (stream->manifest_stream);
     if (lang != NULL) {

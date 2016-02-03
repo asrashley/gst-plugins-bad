@@ -156,12 +156,6 @@ enum
   PROP_LAST
 };
 
-enum
-{
-  SIGNAL_SELECT_BITRATE,
-  LAST_SIGNAL
-};
-
 enum GstAdaptiveDemuxFlowReturn
 {
   GST_ADAPTIVE_DEMUX_FLOW_SWITCH = GST_FLOW_CUSTOM_SUCCESS_2 + 1
@@ -215,8 +209,6 @@ typedef struct _GstAdaptiveDemuxTimer
 } GstAdaptiveDemuxTimer;
 
 static GstBinClass *parent_class = NULL;
-static guint gst_adaptive_demux_signals[LAST_SIGNAL] = { 0 };
-
 static void gst_adaptive_demux_class_init (GstAdaptiveDemuxClass * klass);
 static void gst_adaptive_demux_init (GstAdaptiveDemux * dec,
     GstAdaptiveDemuxClass * klass);
@@ -390,14 +382,6 @@ gst_adaptive_demux_class_init (GstAdaptiveDemuxClass * klass)
   gobject_class->set_property = gst_adaptive_demux_set_property;
   gobject_class->get_property = gst_adaptive_demux_get_property;
   gobject_class->finalize = gst_adaptive_demux_finalize;
-
-  gst_adaptive_demux_signals[SIGNAL_SELECT_BITRATE] =
-      g_signal_new ("select-bitrate", G_TYPE_FROM_CLASS (klass),
-      G_SIGNAL_RUN_LAST, G_STRUCT_OFFSET (GstAdaptiveDemuxClass,
-          signal_select_bitrate),
-      NULL, NULL,
-      g_cclosure_marshal_generic, G_TYPE_UINT64, 2, G_TYPE_UINT64,
-      G_TYPE_UINT64);
 
   g_object_class_install_property (gobject_class, PROP_CONNECTION_SPEED,
       g_param_spec_uint ("connection-speed", "Connection Speed",
@@ -3198,21 +3182,8 @@ gst_adaptive_demux_stream_advance_fragment_unlocked (GstAdaptiveDemux * demux,
       GST_TIME_AS_USECONDS (gst_adaptive_demux_get_monotonic_time (demux));
 
   if (ret == GST_FLOW_OK) {
-    guint64 bitrate;
-    guint64 sig_bitrate;
-
-    sig_bitrate = bitrate =
-        gst_adaptive_demux_stream_update_current_bitrate (demux, stream);
-    g_signal_emit (G_OBJECT (demux),
-        gst_adaptive_demux_signals[SIGNAL_SELECT_BITRATE], 0,
-        stream->currently_selected_rate, bitrate, &sig_bitrate);
-    GST_DEBUG_OBJECT (demux,
-        "Currently using bitrate %" G_GUINT64_FORMAT ", measured bitrate %"
-        G_GUINT64_FORMAT ", signal handler selected %" G_GUINT64_FORMAT,
-        stream->currently_selected_rate, bitrate, sig_bitrate);
-    if (sig_bitrate && sig_bitrate != stream->currently_selected_rate
-        && gst_adaptive_demux_stream_select_bitrate (demux, stream,
-            sig_bitrate)) {
+    if (gst_adaptive_demux_stream_select_bitrate (demux, stream,
+            gst_adaptive_demux_stream_update_current_bitrate (demux, stream))) {
       stream->need_header = TRUE;
       gst_adapter_clear (stream->adapter);
       ret = (GstFlowReturn) GST_ADAPTIVE_DEMUX_FLOW_SWITCH;
