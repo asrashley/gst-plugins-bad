@@ -2234,6 +2234,7 @@ GST_START_TEST (testLiveStream)
   if (http_src_test_data.data)
     gst_structure_free (http_src_test_data.data);
   g_free (mpd);
+  gst_system_clock_set_default (NULL);
   gst_object_unref (clock);
 }
 
@@ -2428,6 +2429,7 @@ GST_START_TEST (testLiveStreamPresentationDelay)
   if (http_src_test_data.data)
     gst_structure_free (http_src_test_data.data);
   g_free (mpd);
+  gst_system_clock_set_default (NULL);
   gst_object_unref (clock);
 }
 
@@ -2582,6 +2584,7 @@ GST_START_TEST (testQueryLiveStream)
   if (http_src_test_data.data)
     gst_structure_free (http_src_test_data.data);
   g_free (mpd);
+  gst_system_clock_set_default (NULL);
   gst_object_unref (clock);
 }
 
@@ -2821,6 +2824,7 @@ GST_START_TEST (testSeekLiveStream)
   if (http_src_test_data.data)
     gst_structure_free (http_src_test_data.data);
   g_free (mpd);
+  gst_system_clock_set_default (NULL);
   gst_object_unref (clock);
 }
 
@@ -3009,6 +3013,7 @@ GST_START_TEST (testClockCompensationHttpXSdate)
   if (http_src_test_data.data)
     gst_structure_free (http_src_test_data.data);
   g_free (mpd);
+  gst_system_clock_set_default (NULL);
   gst_object_unref (clock);
 }
 
@@ -3140,6 +3145,7 @@ GST_START_TEST (testClockCompensationHttpHead)
   if (http_src_test_data.data)
     gst_structure_free (http_src_test_data.data);
   g_free (mpd);
+  gst_system_clock_set_default (NULL);
   gst_object_unref (clock);
 }
 
@@ -3243,6 +3249,7 @@ GST_START_TEST (testClockCompensationHttpNtp)
   if (http_src_test_data.data)
     gst_structure_free (http_src_test_data.data);
   g_free (mpd);
+  gst_system_clock_set_default (NULL);
   gst_object_unref (clock);
 }
 
