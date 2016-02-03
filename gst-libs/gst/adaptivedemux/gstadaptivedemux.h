@@ -158,8 +158,7 @@ struct _GstAdaptiveDemuxStream
   gint64 download_chunk_start_time;
   gint64 download_total_time;
   gint64 download_total_bytes;
-  guint64 current_download_rate; /* average of current download rate */
-  guint64 currently_selected_rate; /* bitrate of currently selected representation */
+  guint64 current_download_rate;
 
   GstAdaptiveDemuxStreamFragment fragment;
 
@@ -425,21 +424,6 @@ struct _GstAdaptiveDemuxClass
    * selected period.
    */
   GstClockTime (*get_period_start_time) (GstAdaptiveDemux *demux);
-
-  /**
-   * signal_select_bitrate: a hook to control adaptive bitrate control
-   * @demux: #GstAdaptiveDemux
-   * @currently_selected_bitrate: The bitrate of the currently selected representation
-   * @download_bitrate: The estimate of the current achieved download rate
-   * Returns: the bitrate that should be used. Normally this will be
-   * @download_bitrate. If @currently_selected_bitrate is returned, the
-   * element that extends from #GstAdaptiveDemux should not change from its
-   * currently selected bitrate.
-   *
-   * Signal that apps can connect to if they wish to control the
-   * adaptive bitrate control in #GstAdaptiveDemux.
-   */
-  guint64      (*signal_select_bitrate) (GstAdaptiveDemux * demux, guint64 currently_selected_bitrate, guint64 download_bitrate);
 };
 
 GType    gst_adaptive_demux_get_type (void);
