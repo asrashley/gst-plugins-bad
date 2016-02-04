@@ -19,6 +19,7 @@
  */
 
 #include <gst/check/gstcheck.h>
+#include <gst/check/gsttestclock.h>
 #include "adaptive_demux_common.h"
 
 #define DEMUX_ELEMENT_NAME "hlsdemux"
@@ -900,8 +901,11 @@ GST_START_TEST (testLiveBitrateSwitching)
   const GValue *requests;
   const GValue *uri;
   const guint64 download_always_mask = 0x0B;
+  GstClock *clock;
   TESTCASE_INIT_BOILERPLATE (segment_size);
 
+  clock = gst_test_clock_new ();
+  gst_system_clock_set_default (clock);
   gst_structure_set (hlsTestCase.state,
       "download-always", GST_TYPE_BITMASK, download_always_mask, NULL);
   http_src_callbacks.src_start = gst_hlsdemux_test_download_once_src_start;
@@ -943,6 +947,8 @@ GST_START_TEST (testLiveBitrateSwitching)
     assert_equals_string (requested_url, expected_url[i]);
     ++i;
   }
+  gst_system_clock_set_default (NULL);
+  gst_object_unref (clock);
   TESTCASE_UNREF_BOILERPLATE;
 }
 
