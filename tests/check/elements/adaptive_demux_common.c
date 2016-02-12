@@ -351,7 +351,7 @@ testSeekTaskDoSeek (gpointer user_data)
 /* function to be called during seek test when demux sends data to AppSink
  * It monitors the data sent and after a while will generate a seek request.
  */
-static gboolean
+gboolean
 testSeekAdaptiveDemuxSendsData (GstAdaptiveDemuxTestEngine * engine,
     GstAdaptiveDemuxTestOutputStream * stream,
     GstBuffer * buffer, gpointer user_data)
@@ -461,7 +461,9 @@ testSeekAdaptiveAppSinkEvent (GstAdaptiveDemuxTestEngine * engine,
   }
 }
 
-/* callback called when main_loop detects a state changed event */
+/* callback called when main_loop detects a state changed event.
+ * Will mark that the seek task started and will allow the download to resume
+ * (download threads are blocked waiting for the seek to occur) */
 static void
 testSeekOnStateChanged (GstBus * bus, GstMessage * msg, gpointer user_data)
 {
@@ -493,7 +495,7 @@ testSeekOnStateChanged (GstBus * bus, GstMessage * msg, gpointer user_data)
  * on the first pad listed in GstAdaptiveDemuxTestOutputStreamData and the
  * first chunk of at least one byte has already arrived in AppSink
  */
-static void
+void
 testSeekPreTestCallback (GstAdaptiveDemuxTestEngine * engine,
     gpointer user_data)
 {
@@ -507,16 +509,20 @@ testSeekPreTestCallback (GstAdaptiveDemuxTestEngine * engine,
       G_CALLBACK (testSeekOnStateChanged), testData);
 }
 
-static void
+void
 testSeekPostTestCallback (GstAdaptiveDemuxTestEngine * engine,
     gpointer user_data)
 {
   GstAdaptiveDemuxTestCase *testData = GST_ADAPTIVE_DEMUX_TEST_CASE (user_data);
+
   for (GList * walk = testData->output_streams; walk; walk = g_list_next (walk)) {
     GstAdaptiveDemuxTestExpectedOutput *td = walk->data;
 
     fail_if (td->segment_verification_needed);
   }
+
+  fail_if (testData->test_task == NULL,
+      "seek test did not create task to perform the seek");
 }
 
 /* function to check total size of data received by AppSink
