@@ -53,6 +53,9 @@ typedef struct _GstDashDemuxTestCase
 
   /* for live mpd, the wallclock time when MPD started to be available */
   GDateTime *availabilityStartTime;
+
+  /* timeshift buffer depth, in ms. -1 for infinite */
+  gint64 timeshiftBufferDepth;
 } GstDashDemuxTestCase;
 
 GType gst_dash_demux_test_case_get_type (void);
@@ -120,6 +123,7 @@ gst_dash_demux_test_case_clear (GstDashDemuxTestCase * test_case)
     g_date_time_unref (test_case->availabilityStartTime);
     test_case->availabilityStartTime = NULL;
   }
+  test_case->timeshiftBufferDepth = -1;
 }
 
 static void
@@ -1665,7 +1669,13 @@ testLiveStreamCheckDataReceived (GstAdaptiveDemuxTestEngine *
     gst_query_parse_seeking (query, NULL, &seekable, &segment_start,
         &segment_end);
     fail_unless (seekable == TRUE);
-    fail_unless (segment_start == 0);
+    if (testData->timeshiftBufferDepth == -1) {
+      /* infinite timeshift buffer, start should be 0 */
+      fail_unless (segment_start == 0);
+    } else {
+      fail_unless (segment_start + testData->timeshiftBufferDepth ==
+          segment_end);
+    }
 
     streamTime = getCurrentPresentationTime (testData->availabilityStartTime);
 
@@ -1850,7 +1860,13 @@ testLiveStreamPresentationDelayCheckDataReceived (GstAdaptiveDemuxTestEngine *
     gst_query_parse_seeking (query, NULL, &seekable, &segment_start,
         &segment_end);
     fail_unless (seekable == TRUE);
-    fail_unless (segment_start == 0);
+    if (testData->timeshiftBufferDepth == -1) {
+      /* infinite timeshift buffer, start should be 0 */
+      fail_unless (segment_start == 0);
+    } else {
+      fail_unless (segment_start + testData->timeshiftBufferDepth ==
+          segment_end);
+    }
 
     streamTime = getCurrentPresentationTime (testData->availabilityStartTime);
 
@@ -1920,6 +1936,7 @@ GST_START_TEST (testLiveStreamPresentationDelay)
   const gchar *mpd_2 = "\""
       "     minBufferTime=\"PT1.500S\""
       "     suggestedPresentationDelay=\"PT3S\""
+      "     timeShiftBufferDepth=\"PT5S\""
       "     minimumUpdatePeriod=\"PT500S\">"
       "  <UTCTiming schemeIdUri=\"urn:mpeg:dash:utc:http-xsdate:2014\" value=\"http://mocktime/http-xsdate\"/>"
       "  <Period>"
@@ -1980,6 +1997,7 @@ GST_START_TEST (testLiveStreamPresentationDelay)
   testData = gst_dash_demux_test_case_new ();
   COPY_OUTPUT_TEST_DATA (outputTestData, testData);
   testData->availabilityStartTime = availabilityStartTime;
+  testData->timeshiftBufferDepth = 5 * GST_SECOND;
 
   gst_adaptive_demux_test_run (DEMUX_ELEMENT_NAME, "http://unit.test/test.mpd",
       &test_callbacks, testData);
