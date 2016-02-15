@@ -456,7 +456,7 @@ struct _GstAdaptiveDemuxClass
    * adaptive bitrate control in #GstAdaptiveDemux.
    * Since: 1.7
    */
-  guint64      (*signal_select_bitrate) (GstAdaptiveDemux * demux, guint64 currently_selected_bitrate, guint64 download_bitrate);
+  guint64      (*signal_select_bitrate) (GstElement * demux, guint64 currently_selected_bitrate, guint64 download_bitrate, gpointer user_data);
 };
 
 GType    gst_adaptive_demux_get_type (void);
