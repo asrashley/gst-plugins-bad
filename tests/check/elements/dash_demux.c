@@ -2580,6 +2580,245 @@ GST_START_TEST (testQueryLiveStream)
 
 GST_END_TEST;
 
+/* function to validate data received by AppSink */
+static gboolean
+testSeekLiveStreamCheckDataReceived (GstAdaptiveDemuxTestEngine * engine,
+    GstAdaptiveDemuxTestOutputStream * stream,
+    GstBuffer * buffer, gpointer user_data)
+{
+  GstDashDemuxTestCase *testData = GST_DASH_DEMUX_TEST_CASE (user_data);
+  GstAdaptiveDemuxTestCase *commonData =
+      GST_ADAPTIVE_DEMUX_TEST_CASE (testData);
+  GstAdaptiveDemuxTestExpectedOutput *testOutputStreamData;
+
+  testOutputStreamData =
+      gst_adaptive_demux_test_find_test_data_by_stream
+      (GST_ADAPTIVE_DEMUX_TEST_CASE (testData), stream, NULL);
+  fail_unless (testOutputStreamData != NULL);
+
+  gst_adaptive_demux_test_check_received_data (engine, stream, buffer,
+      user_data);
+
+  {
+    GstQuery *query;
+    GList *pads;
+    GstPad *pad;
+    gboolean ret;
+    gboolean seekable;
+    gint64 segment_start;
+    gint64 segment_end;
+    GstClockTime streamTime;
+
+    pads = GST_ELEMENT_PADS (stream->appsink);
+
+    /* AppSink should have only 1 pad */
+    fail_unless (pads != NULL);
+    fail_unless (g_list_length (pads) == 1);
+    pad = GST_PAD (pads->data);
+
+    query = gst_query_new_seeking (GST_FORMAT_TIME);
+    ret = gst_pad_peer_query (pad, query);
+    fail_unless (ret == TRUE);
+    gst_query_parse_seeking (query, NULL, &seekable, &segment_start,
+        &segment_end);
+    fail_unless (seekable == TRUE);
+    if (testData->timeshiftBufferDepth == -1) {
+      /* infinite timeshift buffer, start should be 0 */
+      fail_unless (segment_start == 0);
+    } else {
+      fail_unless (segment_start + testData->timeshiftBufferDepth ==
+          segment_end);
+    }
+
+    streamTime = getCurrentPresentationTime (testData->availabilityStartTime);
+
+    if (stream->total_received_size == 0) {
+      /* this is the first segment that is downloaded. It should be segment 3.
+       * Segment 3 starts to be available at its end time
+       * (segment availability time is 9s).
+       * So, a seek query during the download of segment 3 should have a start time 0
+       * and end time between second 9 and current time.
+       * Ideally, end time should be current time - segment duration, but adaptive
+       * demux returns current time as segment stop.
+       * See https://bugzilla.gnome.org/show_bug.cgi?id=753751
+       */
+      fail_unless (segment_end >= 9 * GST_SECOND && segment_end <= streamTime);
+    } else if (stream->total_received_size == commonData->threshold_for_seek) {
+      /* this is the first segment that is downloaded after seek.
+       * It should be segment 1.
+       */
+      fail_unless (segment_end >= 9 * GST_SECOND && segment_end <= streamTime);
+    } else if (stream->total_received_size ==
+        commonData->threshold_for_seek + 1000) {
+      /* this is the second segment that is downloaded after seek.
+       * It should be segment 2.
+       * It is already available, so it is downloaded immediately after
+       * segment 1.
+       */
+      fail_unless (segment_end >= 9 * GST_SECOND && segment_end <= streamTime);
+    } else {
+      fail ("unexpected totalReceivedSize");
+    }
+    gst_query_unref (query);
+  }
+
+  /* for a live stream, no EOS signal is sent, so we must monitor the amount
+   * of data received.
+   */
+  if (stream->total_received_size +
+      stream->segment_received_size +
+      gst_buffer_get_size (buffer) == testOutputStreamData->expected_size) {
+
+    /* signal to the application that another stream has finished */
+    commonData->count_of_finished_streams++;
+
+    if (commonData->count_of_finished_streams ==
+        g_list_length (commonData->output_streams)) {
+      g_main_loop_quit (engine->loop);
+    }
+  }
+
+  return TRUE;
+}
+
+/*
+ * Test seek during live stream.
+ *
+ * There are 4 segments, 3s each. Segment 1 starts at 0s, segment 2 starts at 3s,
+ * segment 3 starts at 6s, segment 4 starts at 9s.
+ * We set the mpd availability 6s before now.
+ * Adaptive demux will automatically seek and start playing the segment
+ * corresponding to the current time. That is segment 3.
+ * Because segment 3 will be available at its end time (9s) adaptive demux
+ * will wait 2+ seconds for it to be available.
+ * After segment3 starts to be downloaded, the test will issue a seek request to
+ * the beginning of the stream. The test will wait for the first 2 segments
+ * to be downloaded and then will terminate.
+ *
+ */
+GST_START_TEST (testSeekLiveStream)
+{
+  gchar *mpd;
+  const gchar *mpd_1 =
+      "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
+      "<MPD xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\""
+      "     xmlns=\"urn:mpeg:DASH:schema:MPD:2011\""
+      "     xsi:schemaLocation=\"urn:mpeg:DASH:schema:MPD:2011 DASH-MPD.xsd\""
+      "     profiles=\"urn:mpeg:dash:profile:isoff-live:2011\""
+      "     type=\"dynamic\" availabilityStartTime=\"";
+  GDateTime *availabilityStartTime;
+  gchar *availabilityStartTimeString;
+  const gchar *mpd_2 = "\""
+      "     minBufferTime=\"PT1.500S\""
+      "     minimumUpdatePeriod=\"PT500S\">"
+      "  <UTCTiming schemeIdUri=\"urn:mpeg:dash:utc:http-xsdate:2014\" value=\"http://mocktime/http-xsdate\"/>"
+      "  <Period>"
+      "    <AdaptationSet mimeType=\"audio/webm\""
+      "                   subsegmentAlignment=\"true\">"
+      "      <Representation id=\"171\""
+      "                      codecs=\"vorbis\""
+      "                      audioSamplingRate=\"44100\""
+      "                      startWithSAP=\"1\""
+      "                      bandwidth=\"129553\">"
+      "        <AudioChannelConfiguration"
+      "           schemeIdUri=\"urn:mpeg:dash:23003:3:audio_channel_configuration:2011\""
+      "           value=\"2\" />"
+      "        <SegmentTemplate duration=\"3\""
+      "                         media=\"audio$Number$.webm\""
+      "                         >"
+      "        </SegmentTemplate>"
+      "      </Representation></AdaptationSet></Period></MPD>";
+
+  GstDashDemuxTestInputData inputTestData[] = {
+    {"http://unit.test/test.mpd", NULL, 0},
+    {"http://mocktime/http-xsdate", (guint8 *) "0", 0}, /* server is 0s ahead */
+    {"http://unit.test/audio1.webm", NULL, 1000},
+    {"http://unit.test/audio2.webm", NULL, 2000},
+    {"http://unit.test/audio3.webm", NULL, 3000},
+    {"http://unit.test/audio4.webm", NULL, 4000},
+    {NULL, NULL, 0},
+  };
+  /* the test will seek to the beginning of the stream and we will allow it to
+   * download the first 2 segments, so we expect to receive
+   * thresholdForSeek + size of the first 2 segments.
+   * We configure here the size of the first 2 segments and the test will update
+   * expectedSize during seek with the amount of bytes downloaded when the seek
+   * occurred
+   */
+  GstAdaptiveDemuxTestExpectedOutput outputTestData[] = {
+    {"audio_00", 1000 + 2000, NULL},
+  };
+  GstTestHTTPSrcCallbacks http_src_callbacks = { 0 };
+  GstTestHTTPSrcTestData http_src_test_data = { 0 };
+  GstAdaptiveDemuxTestCallbacks test_callbacks = { 0 };
+  GstDashDemuxTestCase *testData;
+  GstClock *clock;
+
+  clock = gst_test_clock_new ();
+  gst_system_clock_set_default (clock);
+
+  availabilityStartTime = timeFromNow (-6);
+  availabilityStartTimeString = toXSDateTime (availabilityStartTime);
+  mpd = g_strdup_printf ("%s%s%s", mpd_1, availabilityStartTimeString, mpd_2);
+  g_free (availabilityStartTimeString);
+  inputTestData[0].payload = (guint8 *) mpd;
+
+  http_src_callbacks.src_start = gst_dashdemux_http_src_start;
+  http_src_callbacks.src_create =
+      gst_dashdemux_http_src_create_mock_time_server;
+  http_src_test_data.input = inputTestData;
+  gst_test_http_src_install_callbacks (&http_src_callbacks,
+      &http_src_test_data);
+
+  test_callbacks.appsink_received_data = testSeekLiveStreamCheckDataReceived;
+  test_callbacks.appsink_eos = gst_adaptive_demux_test_unexpected_eos;
+  test_callbacks.pre_test = testSeekPreTestCallback;
+  test_callbacks.post_test = testSeekPostTestCallback;
+  test_callbacks.demux_sent_data = testSeekAdaptiveDemuxSendsData;
+
+  testData = gst_dash_demux_test_case_new ();
+  COPY_OUTPUT_TEST_DATA (outputTestData, testData);
+
+  testData->availabilityStartTime = availabilityStartTime;
+
+  /* first segment to be downloaded has size 3000
+   * Issue a seek request after first segment has started to be downloaded
+   * on audio_00 stream and the first chunk of GST_FAKE_SOUP_HTTP_SRC_MAX_BUF_SIZE
+   * has already arrived in AppSink
+   */
+  GST_ADAPTIVE_DEMUX_TEST_CASE (testData)->threshold_for_seek = 1;
+
+  /* seek to 5ms.
+   * Because there is only one fragment, we expect the whole file to be
+   * downloaded again
+   */
+  GST_ADAPTIVE_DEMUX_TEST_CASE (testData)->seek_event =
+      gst_event_new_seek (1.0, GST_FORMAT_TIME,
+      GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT, GST_SEEK_TYPE_SET,
+      5 * GST_MSECOND, GST_SEEK_TYPE_NONE, 0);
+
+  /* download in small chunks to allow seek to happen during the file download.
+   * The first file to be downloaded has size 3000 (segment 3) so blocksize
+   * must be smaller than this.
+   * It also needs to be greater than the first segment size (1000) so that
+   * the test can detect when the second segment is being downloaded.
+   * TODO: improve recognition of segment currently downloaded.
+   */
+  gst_test_http_src_set_default_blocksize (1024);
+
+  gst_adaptive_demux_test_run (DEMUX_ELEMENT_NAME, "http://unit.test/test.mpd",
+      &test_callbacks, testData);
+
+  g_object_unref (testData);
+  if (http_src_test_data.data)
+    gst_structure_free (http_src_test_data.data);
+  g_free (mpd);
+  gst_system_clock_set_default (NULL);
+  gst_object_unref (clock);
+}
+
+GST_END_TEST;
+
 static Suite *
 dash_demux_suite (void)
 {
@@ -2609,6 +2848,7 @@ dash_demux_suite (void)
   tcase_add_test (tc_liveTests, testLiveStream);
   tcase_add_test (tc_liveTests, testLiveStreamPresentationDelay);
   tcase_add_test (tc_liveTests, testQueryLiveStream);
+  tcase_add_test (tc_liveTests, testSeekLiveStream);
 
   tcase_add_unchecked_fixture (tc_basicTests, gst_adaptive_demux_test_setup,
       gst_adaptive_demux_test_teardown);

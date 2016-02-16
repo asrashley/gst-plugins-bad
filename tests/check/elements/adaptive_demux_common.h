@@ -238,6 +238,28 @@ gboolean gst_adaptive_demux_test_check_received_data (
     GstBuffer * buffer,
     gpointer user_data);
 
+/* function to be called during seek test when demux sends data to AppSink
+ * It monitors the data sent and after a while will generate a seek request.
+ */
+gboolean
+testSeekAdaptiveDemuxSendsData (GstAdaptiveDemuxTestEngine * engine,
+    GstAdaptiveDemuxTestOutputStream * stream,
+    GstBuffer * buffer, gpointer user_data);
+
+/*
+ * Issue a seek request after media segment has started to be downloaded
+ * on the first pad listed in GstAdaptiveDemuxTestOutputStreamData and the
+ * first chunk of at least one byte has already arrived in AppSink
+ */
+void
+testSeekPreTestCallback (GstAdaptiveDemuxTestEngine * engine,
+    gpointer user_data);
+
+/* function to make extra checks at end of seek test */
+void
+testSeekPostTestCallback (GstAdaptiveDemuxTestEngine * engine,
+    gpointer user_data);
+
 /**
  * gst_adaptive_demux_test_find_test_data_by_stream:
  * @testData: The #GstAdaptiveDemuxTestCase object that contains the
