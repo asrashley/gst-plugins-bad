@@ -1808,6 +1808,192 @@ GST_START_TEST (testLiveStream)
 
 GST_END_TEST;
 
+/* function to validate data received by AppSink */
+static gboolean
+testLiveStreamPresentationDelayCheckDataReceived (GstAdaptiveDemuxTestEngine *
+    engine, GstAdaptiveDemuxTestOutputStream * stream, GstBuffer * buffer,
+    gpointer user_data)
+{
+  GstDashDemuxTestCase *testData = GST_DASH_DEMUX_TEST_CASE (user_data);
+  GstAdaptiveDemuxTestCase *commonData =
+      GST_ADAPTIVE_DEMUX_TEST_CASE (testData);
+  GstAdaptiveDemuxTestExpectedOutput *testOutputStreamData;
+
+  testOutputStreamData =
+      gst_adaptive_demux_test_find_test_data_by_stream
+      (GST_ADAPTIVE_DEMUX_TEST_CASE (testData), stream, NULL);
+  fail_unless (testOutputStreamData != NULL);
+
+  gst_adaptive_demux_test_check_received_data (engine, stream, buffer,
+      user_data);
+
+  {
+    GstQuery *query;
+    GList *pads;
+    GstPad *pad;
+    gboolean ret;
+    gboolean seekable;
+    gint64 segment_start;
+    gint64 segment_end;
+    GstClockTime streamTime;
+
+    pads = GST_ELEMENT_PADS (stream->appsink);
+
+    /* AppSink should have only 1 pad */
+    fail_unless (pads != NULL);
+    fail_unless (g_list_length (pads) == 1);
+    pad = GST_PAD (pads->data);
+
+    query = gst_query_new_seeking (GST_FORMAT_TIME);
+    ret = gst_pad_peer_query (pad, query);
+    fail_unless (ret == TRUE);
+    gst_query_parse_seeking (query, NULL, &seekable, &segment_start,
+        &segment_end);
+    fail_unless (seekable == TRUE);
+    fail_unless (segment_start == 0);
+
+    streamTime = getCurrentPresentationTime (testData->availabilityStartTime);
+
+    if (stream->total_received_size == 0) {
+      /* this is the first segment that is downloaded. It should be segment 2.
+       * Segment 2 starts to be available at its end time
+       * (segment availability time is 6s).
+       * But that is in the past (current time is 6.xx seconds, because we have
+       * 2s presentation delay), so we do not need to wait for it to be available.
+       * A seek query during the download of segment 2 should have a start time 0
+       * and end time 6 seconds (end of segment 2).
+       */
+      fail_unless (segment_end >= 6 * GST_SECOND && segment_end <= streamTime);
+    } else if (stream->total_received_size == 2000) {
+      /* this is the second segment that is downloaded. It should be segment 3.
+       */
+      fail_unless (segment_end >= 9 * GST_SECOND && segment_end <= streamTime);
+    } else if (stream->total_received_size == 2000 + 3000) {
+      fail_unless (segment_end >= 12 * GST_SECOND && segment_end <= streamTime);
+    } else {
+      fail ("unexpected totalReceivedSize");
+    }
+    gst_query_unref (query);
+  }
+
+  /* for a live stream, no EOS signal is sent, so we must monitor the amount
+   * of data received.
+   */
+  if (stream->total_received_size +
+      stream->segment_received_size +
+      gst_buffer_get_size (buffer) == testOutputStreamData->expected_size) {
+
+    /* signal to the application that another stream has finished */
+    commonData->count_of_finished_streams++;
+
+    if (commonData->count_of_finished_streams ==
+        g_list_length (commonData->output_streams)) {
+      g_main_loop_quit (engine->loop);
+    }
+  }
+
+  return TRUE;
+}
+
+/*
+ * Test a live stream mpd with an audio stream.
+ *
+ * There are 4 segments, 3s each.
+ * We set the mpd availability 6s before now.
+ * SuggestedPresentationDelay is 3s, so we expect to download the last 3 segments
+ * without waiting for the first one.
+ * The test should take a little over 6s.
+ *
+ */
+GST_START_TEST (testLiveStreamPresentationDelay)
+{
+  gchar *mpd;
+  const gchar *mpd_1 =
+      "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
+      "<MPD xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\""
+      "     xmlns=\"urn:mpeg:DASH:schema:MPD:2011\""
+      "     xsi:schemaLocation=\"urn:mpeg:DASH:schema:MPD:2011 DASH-MPD.xsd\""
+      "     profiles=\"urn:mpeg:dash:profile:isoff-live:2011\""
+      "     type=\"dynamic\" availabilityStartTime=\"";
+  GDateTime *availabilityStartTime;
+  gchar *availabilityStartTimeString;
+  const gchar *mpd_2 = "\""
+      "     minBufferTime=\"PT1.500S\""
+      "     suggestedPresentationDelay=\"PT3S\""
+      "     minimumUpdatePeriod=\"PT500S\">"
+      "  <UTCTiming schemeIdUri=\"urn:mpeg:dash:utc:http-xsdate:2014\" value=\"http://mocktime/http-xsdate\"/>"
+      "  <Period>"
+      "    <AdaptationSet mimeType=\"audio/webm\""
+      "                   subsegmentAlignment=\"true\">"
+      "      <Representation id=\"171\""
+      "                      codecs=\"vorbis\""
+      "                      audioSamplingRate=\"44100\""
+      "                      startWithSAP=\"1\""
+      "                      bandwidth=\"129553\">"
+      "        <AudioChannelConfiguration"
+      "           schemeIdUri=\"urn:mpeg:dash:23003:3:audio_channel_configuration:2011\""
+      "           value=\"2\" />"
+      "        <SegmentTemplate duration=\"3\""
+      "                         media=\"audio$Number$.webm\""
+      "                         >"
+      "        </SegmentTemplate>"
+      "      </Representation></AdaptationSet></Period></MPD>";
+
+  GstDashDemuxTestInputData inputTestData[] = {
+    {"http://unit.test/test.mpd", NULL, 0},
+    {"http://mocktime/http-xsdate", (guint8 *) "0", 0}, /* server is 0s ahead */
+    {"http://unit.test/audio1.webm", NULL, 1000},
+    {"http://unit.test/audio2.webm", NULL, 2000},
+    {"http://unit.test/audio3.webm", NULL, 3000},
+    {"http://unit.test/audio4.webm", NULL, 4000},
+    {NULL, NULL, 0},
+  };
+  GstAdaptiveDemuxTestExpectedOutput outputTestData[] = {
+    {"audio_00", 2000 + 3000 + 4000, NULL},
+  };
+  GstTestHTTPSrcCallbacks http_src_callbacks = { 0 };
+  GstTestHTTPSrcTestData http_src_test_data = { 0 };
+  GstAdaptiveDemuxTestCallbacks test_callbacks = { 0 };
+  GstDashDemuxTestCase *testData;
+  GstClock *clock;
+
+  clock = gst_test_clock_new ();
+  gst_system_clock_set_default (clock);
+
+  availabilityStartTime = timeFromNow (-6);
+  availabilityStartTimeString = toXSDateTime (availabilityStartTime);
+  mpd = g_strdup_printf ("%s%s%s", mpd_1, availabilityStartTimeString, mpd_2);
+  g_free (availabilityStartTimeString);
+  inputTestData[0].payload = (guint8 *) mpd;
+
+  http_src_callbacks.src_start = gst_dashdemux_http_src_start;
+  http_src_callbacks.src_create =
+      gst_dashdemux_http_src_create_mock_time_server;
+  http_src_test_data.input = inputTestData;
+  gst_test_http_src_install_callbacks (&http_src_callbacks,
+      &http_src_test_data);
+
+  test_callbacks.appsink_received_data =
+      testLiveStreamPresentationDelayCheckDataReceived;
+  test_callbacks.appsink_eos = gst_adaptive_demux_test_unexpected_eos;
+
+  testData = gst_dash_demux_test_case_new ();
+  COPY_OUTPUT_TEST_DATA (outputTestData, testData);
+  testData->availabilityStartTime = availabilityStartTime;
+
+  gst_adaptive_demux_test_run (DEMUX_ELEMENT_NAME, "http://unit.test/test.mpd",
+      &test_callbacks, testData);
+
+  g_object_unref (testData);
+  if (http_src_test_data.data)
+    gst_structure_free (http_src_test_data.data);
+  g_free (mpd);
+  gst_system_clock_set_default (NULL);
+  gst_object_unref (clock);
+}
+
+GST_END_TEST;
+
 static Suite *
 dash_demux_suite (void)
 {
@@ -1834,6 +2020,7 @@ dash_demux_suite (void)
   tcase_add_test (tc_basicTests, testContentProtection);
 
   tcase_add_test (tc_liveTests, testLiveStream);
+  tcase_add_test (tc_liveTests, testLiveStreamPresentationDelay);
 
   tcase_add_unchecked_fixture (tc_basicTests, gst_adaptive_demux_test_setup,
       gst_adaptive_demux_test_teardown);
