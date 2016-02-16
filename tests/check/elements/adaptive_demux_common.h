@@ -40,6 +40,15 @@ G_BEGIN_DECLS
 #define GST_IS_ADAPTIVE_DEMUX_TEST_CASE_CLASS(klass) \
   (G_TYPE_CHECK_CLASS_TYPE((klass), GST_TYPE_ADAPTIVE_DEMUX_TEST_CASE))
 
+/* barrier used for thread synchronisation */
+typedef struct
+{
+  GCond condition;
+  GMutex mutex;
+  guint count;
+  guint runners;
+} GstAdaptiveDemuxTestBarrier;
+
 /**
  * TestTaskState:
  * The seek test uses a separate task to perform the seek operation.
@@ -108,6 +117,16 @@ typedef struct _GstAdaptiveDemuxTestCase
   GMutex test_task_state_lock;
   GCond test_task_state_cond;
 
+  /* task used for a second seek request */
+  GstTask *test_task2;
+  GRecMutex test_task_lock2;
+  TestTaskState test_task_state2;
+  GMutex test_task_state_lock2;
+  GCond test_task_state_cond2;
+
+  /* barrier to synchronise threads */
+  GstAdaptiveDemuxTestBarrier barrier;
+
   /* seek test will wait for this amount of bytes to be sent by 
    * demux to AppSink before triggering a seek request
    */
@@ -134,6 +153,16 @@ GType gst_adaptive_demux_test_case_get_type (void);
  * object. Use #g_object_unref to free.
  */
 GstAdaptiveDemuxTestCase * gst_adaptive_demux_test_case_new (void) G_GNUC_MALLOC;
+
+void gst_adaptive_demux_test_barrier_init (
+    GstAdaptiveDemuxTestBarrier * barrier,
+    guint runners);
+
+void gst_adaptive_demux_test_barrier_clear (
+    GstAdaptiveDemuxTestBarrier * barrier);
+
+void gst_adaptive_demux_test_barrier_wait (
+    GstAdaptiveDemuxTestBarrier * barrier);
 
 /**
  * gst_adaptive_demux_test_seek: test that element supports seeking
