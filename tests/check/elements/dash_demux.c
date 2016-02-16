@@ -332,6 +332,7 @@ getCurrentPresentationTime (GDateTime * availabilityStartTime)
   return stream_now * GST_USECOND;
 }
 
+
 /******************** Test specific code starts here **************************/
 
 /*
@@ -932,6 +933,418 @@ GST_START_TEST (testReverseSeekSnapAfterPosition)
       GST_SEEK_TYPE_SET, 2500 * GST_MSECOND,
       GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_SNAP_AFTER, 1000 * GST_MSECOND,
       2000 * GST_MSECOND, 1);
+}
+
+GST_END_TEST;
+
+typedef struct _SeekTaskContext
+{
+  GstAppSink *appsink;
+  GstTask *task;
+  GstDashDemuxTestCase *testData;
+} SeekTaskContext;
+
+/* function to generate a seek event. Will be run in a separate thread */
+static void
+testParallelSeekTaskDoSeek (gpointer user_data)
+{
+  SeekTaskContext *context = (SeekTaskContext *) user_data;
+  GstTask *task = context->task;
+
+  GST_DEBUG ("testSeekTaskDoSeek calling seek");
+
+  /* seek to 5ms.
+   * Because there is only one fragment, we expect the whole file to be
+   * downloaded again
+   */
+  if (!gst_element_seek_simple (GST_ELEMENT (context->appsink), GST_FORMAT_TIME,
+          GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT, 5 * GST_MSECOND)) {
+    fail ("Seek failed!\n");
+  }
+  GST_DEBUG ("seek ok");
+  g_slice_free (SeekTaskContext, context);
+  gst_task_stop (task);
+}
+
+/* function to generate a seek event. Will be run in a separate thread */
+static void
+testParallelSeekTaskDoSeek2 (gpointer user_data)
+{
+  SeekTaskContext *context = (SeekTaskContext *) user_data;
+  GstTask *task = context->task;
+  GstAdaptiveDemuxTestCase *testData =
+      GST_ADAPTIVE_DEMUX_TEST_CASE (context->testData);
+
+  GST_DEBUG ("testSeekTaskDoSeek calling seek");
+
+  /* seek to beginning of the file.
+   * Adaptive demux supports only GST_FORMAT_TIME requests, so this should
+   * return error.
+   */
+  if (gst_element_seek_simple (GST_ELEMENT (context->appsink), GST_FORMAT_BYTES,
+          GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT, 0)) {
+    fail ("seek succeeded!");
+  }
+  GST_DEBUG ("seek failed, expected");
+
+  g_mutex_lock (&testData->test_task_state_lock2);
+  testData->test_task_state2 = TEST_TASK_STATE_EXITING;
+  g_cond_signal (&testData->test_task_state_cond2);
+  g_mutex_unlock (&testData->test_task_state_lock2);
+
+  g_slice_free (SeekTaskContext, context);
+  gst_task_stop (task);
+}
+
+/* function to be called during seek test when dash sends data to AppSink
+ * It monitors the data sent and after a while will generate a seek request.
+ */
+static gboolean
+testParallelSeekDashdemuxSendsData (GstAdaptiveDemuxTestEngine * engine,
+    GstAdaptiveDemuxTestOutputStream * stream,
+    GstBuffer * buffer, gpointer user_data)
+{
+  GstAdaptiveDemuxTestCase *testData = GST_ADAPTIVE_DEMUX_TEST_CASE (user_data);
+  SeekTaskContext *seekContext;
+  GstAdaptiveDemuxTestExpectedOutput *testOutputStreamData;
+  guint index = 0;
+
+  testOutputStreamData =
+      gst_adaptive_demux_test_find_test_data_by_stream (testData, stream,
+      &index);
+  fail_unless (testOutputStreamData != NULL);
+
+  /* first entry in testData->output_streams is the
+     PAD on which to perform the seek */
+  if (index == 0 &&
+      stream->total_received_size +
+      stream->segment_received_size >= testData->threshold_for_seek) {
+
+    GST_DEBUG ("starting seek task");
+
+    /* the seek was to the beginning of the file, so expect to receive
+     * what we have received until now + a whole file
+     */
+    testOutputStreamData->expected_size +=
+        stream->total_received_size + stream->segment_received_size;
+
+    /* wait for all streams to reach their seek threshold */
+    GST_TEST_UNLOCK (engine);
+    gst_adaptive_demux_test_barrier_wait (&testData->barrier);
+    GST_TEST_LOCK (engine);
+
+    /* invalidate thresholdForSeek so that we do not seek again next time we receive data */
+    testData->threshold_for_seek = -1;
+
+    /* start a separate task to perform the seek */
+    g_mutex_lock (&testData->test_task_state_lock);
+    testData->test_task_state =
+        TEST_TASK_STATE_WAITING_FOR_TESTSRC_STATE_CHANGE;
+    g_mutex_unlock (&testData->test_task_state_lock);
+
+    seekContext = g_slice_new (SeekTaskContext);
+    seekContext->appsink = stream->appsink;
+    seekContext->testData = GST_DASH_DEMUX_TEST_CASE (testData);
+    testData->test_task = seekContext->task =
+        gst_task_new ((GstTaskFunction) testParallelSeekTaskDoSeek, seekContext,
+        NULL);
+    gst_task_set_lock (testData->test_task, &testData->test_task_lock);
+    gst_task_start (testData->test_task);
+
+    GST_DEBUG ("seek task started");
+
+    /* wait for seekTask to run, send a flush start event to AppSink
+     * and change the fakesouphttpsrc element state from PLAYING to PAUSED
+     */
+    GST_TEST_UNLOCK (engine);
+    g_mutex_lock (&testData->test_task_state_lock);
+    GST_DEBUG ("waiting for seek task to change state on fakesrc");
+    while (testData->test_task_state != TEST_TASK_STATE_EXITING) {
+      g_cond_wait (&testData->test_task_state_cond,
+          &testData->test_task_state_lock);
+    }
+    g_mutex_unlock (&testData->test_task_state_lock);
+    GST_TEST_LOCK (engine);
+
+    /* we can continue now, but this buffer will be rejected by AppSink
+     * because it is in flushing mode
+     */
+    GST_DEBUG ("seek task changed state on fakesrc, resuming");
+
+  } else if (index == 1 &&
+      stream->total_received_size +
+      stream->segment_received_size >= testData->threshold_for_seek) {
+
+    /* the seek was to the beginning of the file, so expect to receive
+     * what we have received until now + a whole file
+     */
+    testOutputStreamData->expected_size +=
+        stream->total_received_size + stream->segment_received_size;
+
+    /* wait for all streams to reach their seek threshold */
+    GST_TEST_UNLOCK (engine);
+    gst_adaptive_demux_test_barrier_wait (&testData->barrier);
+    GST_TEST_LOCK (engine);
+
+    /* wait for audio stream to seek */
+    GST_TEST_UNLOCK (engine);
+    g_mutex_lock (&testData->test_task_state_lock);
+    GST_DEBUG ("video stream waiting for seek task to change state on fakesrc");
+    while (testData->test_task_state != TEST_TASK_STATE_EXITING) {
+      g_cond_wait (&testData->test_task_state_cond,
+          &testData->test_task_state_lock);
+    }
+    g_mutex_unlock (&testData->test_task_state_lock);
+    GST_TEST_LOCK (engine);
+  }
+
+  return TRUE;
+}
+
+static gboolean
+testParallelSeekDashdemuxSendsEvent (GstAdaptiveDemuxTestEngine * engine,
+    GstAdaptiveDemuxTestOutputStream * stream,
+    GstEvent * event, gpointer user_data)
+{
+  GstAdaptiveDemuxTestCase *testData = GST_ADAPTIVE_DEMUX_TEST_CASE (user_data);
+  SeekTaskContext *seekContext;
+  guint index = 0;
+
+  GST_DEBUG ("received event %s", GST_EVENT_TYPE_NAME (event));
+
+  if (GST_EVENT_TYPE (event) == GST_EVENT_FLUSH_START &&
+      index == 0 && testData->test_task2 == NULL) {
+    gint64 end_time;
+    gboolean timeout_expired = FALSE;
+
+    /* start the second seek while the first one is still active */
+    g_mutex_lock (&testData->test_task_state_lock2);
+    testData->test_task_state2 =
+        TEST_TASK_STATE_WAITING_FOR_TESTSRC_STATE_CHANGE;
+    g_mutex_unlock (&testData->test_task_state_lock2);
+
+    seekContext = g_slice_new (SeekTaskContext);
+    /* send the seek on the other stream appsink */
+    seekContext->appsink = ((GstAdaptiveDemuxTestOutputStream *)
+        g_ptr_array_index (engine->output_streams, 1))->appsink;
+    seekContext->testData = GST_DASH_DEMUX_TEST_CASE (testData);
+    testData->test_task2 = seekContext->task =
+        gst_task_new ((GstTaskFunction) testParallelSeekTaskDoSeek2,
+        seekContext, NULL);
+    gst_task_set_lock (testData->test_task2, &testData->test_task_lock2);
+    gst_task_start (testData->test_task2);
+
+    /* wait for seekTask2 to run */
+    end_time = g_get_monotonic_time () + 1 * G_TIME_SPAN_SECOND;
+    GST_TEST_UNLOCK (engine);
+    g_mutex_lock (&testData->test_task_state_lock2);
+    GST_DEBUG ("waiting for seek task to run and fail");
+    while (testData->test_task_state2 != TEST_TASK_STATE_EXITING &&
+        timeout_expired == FALSE) {
+      if (!g_cond_wait_until (&testData->test_task_state_cond2,
+              &testData->test_task_state_lock2, end_time)) {
+        /* timeout expired, second seek was serialised
+         * test is passed */
+        timeout_expired = TRUE;
+      }
+    }
+    if (testData->test_task_state2 == TEST_TASK_STATE_EXITING) {
+      /* second seek succeeded while the first one was ongoing. It should have
+       * been serialised.
+       * The test failed
+       */
+      fail ("second seek was not serialised!");
+    }
+    g_mutex_unlock (&testData->test_task_state_lock2);
+    GST_TEST_LOCK (engine);
+  }
+
+  return TRUE;
+}
+
+/* callback called when main_loop detects a state changed event */
+static void
+testParallelSeekOnStateChanged (GstBus * bus, GstMessage * msg,
+    gpointer user_data)
+{
+  GstAdaptiveDemuxTestCase *testData = GST_ADAPTIVE_DEMUX_TEST_CASE (user_data);
+  //GstAdaptiveDemuxTestExpectedOutput *testOutputStreamData;
+  GstState old_state, new_state;
+  const char *srcName = GST_OBJECT_NAME (msg->src);
+
+  gst_message_parse_state_changed (msg, &old_state, &new_state, NULL);
+  GST_DEBUG ("Element %s changed state from %s to %s",
+      GST_OBJECT_NAME (msg->src),
+      gst_element_state_get_name (old_state),
+      gst_element_state_get_name (new_state));
+
+  if (g_str_has_prefix (srcName, "srcbin-audio") &&
+      old_state == GST_STATE_PLAYING && new_state == GST_STATE_PAUSED) {
+    g_mutex_lock (&testData->test_task_state_lock);
+    if (testData->test_task_state ==
+        TEST_TASK_STATE_WAITING_FOR_TESTSRC_STATE_CHANGE) {
+      GST_DEBUG ("changing seekTaskState");
+      testData->test_task_state = TEST_TASK_STATE_EXITING;
+      g_cond_broadcast (&testData->test_task_state_cond);
+    }
+    g_mutex_unlock (&testData->test_task_state_lock);
+  }
+}
+
+static void
+testParallelSeekPreTestCallback (GstAdaptiveDemuxTestEngine * engine,
+    gpointer user_data)
+{
+  GstAdaptiveDemuxTestCase *testData = GST_ADAPTIVE_DEMUX_TEST_CASE (user_data);
+  GstBus *bus;
+
+  /* media segment starts at 4687
+   * Issue a seek request after media segment has started to be downloaded
+   * on the first pad listed in GstAdaptiveDemuxTestOutputStreamData and the
+   * first chunk of at least one byte has already arrived in AppSink
+   */
+  testData->threshold_for_seek = 4687 + 1;
+
+  gst_adaptive_demux_test_barrier_init (&testData->barrier,
+      g_list_length (testData->output_streams));
+
+  /* register a callback to listen for state change events */
+  bus = gst_pipeline_get_bus (GST_PIPELINE (engine->pipeline));
+  gst_bus_add_signal_watch (bus);
+  g_signal_connect (bus, "message::state-changed",
+      G_CALLBACK (testParallelSeekOnStateChanged), testData);
+}
+
+/* function to do test seek cleanup */
+static void
+testParallelSeekPostTestCallback (GstAdaptiveDemuxTestEngine * engine,
+    gpointer user_data)
+{
+  GstAdaptiveDemuxTestCase *testData = GST_ADAPTIVE_DEMUX_TEST_CASE (user_data);
+
+  fail_if (testData->test_task == NULL,
+      "seek test did not create task to perform the seek");
+
+  fail_if (testData->test_task2 == NULL,
+      "seek test did not create second task to perform the seek");
+
+  gst_adaptive_demux_test_barrier_clear (&testData->barrier);
+}
+
+/*
+ * Test making 2 seek requests in parallel
+ *
+ * The test has 2 streams: an audio stream and a video stream
+ * Each stream will download thresholdForSeek bytes and will wait for the
+ * other stream to download thresholdForSeek bytes. This ensures that both
+ * streams update the expectedBytes at the same time, during the flushing seek.
+ * After both streams have downloaded the thresholdForSeek bytes, the audio stream
+ * will run a seek request on a separate thread. Both streams will wait for this
+ * seek request to start the seek process (they listen for state changes in the
+ * adaptive demux src element).
+ * The seek request is a flushing seek so adaptive demux will send a flush to
+ * all downstream elements. The test registers a callback to listen for this
+ * flush event.
+ * When a flush event was detected on the audio stream (so we know the first
+ * seek is in progress), the callback will run a second seek request in a
+ * different task. This seek request is an invalid seek (it will try to seek
+ * using GST_FORMAT_BYTES instead of supported GST_FORMAT_TIME) but this is
+ * sufficient to have a seek request reach adaptive demux. If adaptive demux
+ * has properly implemented the serialisation of seek requests, this second seek
+ * should block. The callback that started this second seek will wait for 1
+ * second to see if the seek task completes or not. If the task correctly serialise
+ * on adaptive demux, the callback will timeout his wait and declare the test pass.
+ * If the callback detects that the second seek task terminated, the test is failed.
+ * When the second seek request serialises, the flush callback will timeout and
+ * will exit, unblocking the first seek request. This manages to finish and will
+ * let the second seek request run, but its run will not produce effects. The
+ * streams download resumes and the test will validate at the end that the first
+ * seek request was successful.
+ *
+ */
+GST_START_TEST (testParallelSeek)
+{
+  const gchar *mpd =
+      "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
+      "<MPD xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\""
+      "     xmlns=\"urn:mpeg:DASH:schema:MPD:2011\""
+      "     xsi:schemaLocation=\"urn:mpeg:DASH:schema:MPD:2011 DASH-MPD.xsd\""
+      "     profiles=\"urn:mpeg:dash:profile:isoff-on-demand:2011\""
+      "     type=\"static\""
+      "     minBufferTime=\"PT1.500S\""
+      "     mediaPresentationDuration=\"PT135.743S\">"
+      "  <Period>"
+      "    <AdaptationSet mimeType=\"audio/webm\""
+      "                   subsegmentAlignment=\"true\">"
+      "      <Representation id=\"171\""
+      "                      codecs=\"vorbis\""
+      "                      audioSamplingRate=\"44100\""
+      "                      startWithSAP=\"1\""
+      "                      bandwidth=\"129553\">"
+      "        <AudioChannelConfiguration"
+      "           schemeIdUri=\"urn:mpeg:dash:23003:3:audio_channel_configuration:2011\""
+      "           value=\"2\" />"
+      "        <BaseURL>audio.webm</BaseURL>"
+      "        <SegmentBase indexRange=\"4452-4686\""
+      "                     indexRangeExact=\"true\">"
+      "          <Initialization range=\"0-4451\" />"
+      "        </SegmentBase>"
+      "      </Representation>"
+      "    </AdaptationSet>"
+      "    <AdaptationSet mimeType=\"video/webm\""
+      "                   subsegmentAlignment=\"true\">"
+      "      <Representation id=\"242\""
+      "                      codecs=\"vp9\""
+      "                      width=\"426\""
+      "                      height=\"240\""
+      "                      startWithSAP=\"1\""
+      "                      bandwidth=\"490208\">"
+      "        <BaseURL>video.webm</BaseURL>"
+      "        <SegmentBase indexRange=\"4452-4686\""
+      "                     indexRangeExact=\"true\">"
+      "          <Initialization range=\"0-4451\" />"
+      "        </SegmentBase>"
+      "      </Representation></AdaptationSet></Period></MPD>";
+
+  GstDashDemuxTestInputData inputTestData[] = {
+    {"http://unit.test/test.mpd", (guint8 *) mpd, 0},
+    {"http://unit.test/audio.webm", NULL, 10000},
+    {"http://unit.test/video.webm", NULL, 10000},
+    {NULL, NULL, 0},
+  };
+  GstAdaptiveDemuxTestExpectedOutput outputTestData[] = {
+    {"audio_00", 10000, NULL},
+    {"video_00", 10000, NULL},
+  };
+  GstTestHTTPSrcCallbacks http_src_callbacks = { 0 };
+  GstTestHTTPSrcTestData http_src_test_data = { 0 };
+  GstAdaptiveDemuxTestCallbacks test_callbacks = { 0 };
+  GstDashDemuxTestCase *testData;
+
+  http_src_callbacks.src_start = gst_dashdemux_http_src_start;
+  http_src_callbacks.src_create = gst_dashdemux_http_src_create;
+  http_src_test_data.input = inputTestData;
+  gst_test_http_src_install_callbacks (&http_src_callbacks,
+      &http_src_test_data);
+
+  test_callbacks.appsink_received_data =
+      gst_adaptive_demux_test_check_received_data;
+  test_callbacks.appsink_eos =
+      gst_adaptive_demux_test_check_size_of_received_data;
+  test_callbacks.pre_test = testParallelSeekPreTestCallback;
+  test_callbacks.post_test = testParallelSeekPostTestCallback;
+  test_callbacks.demux_sent_data = testParallelSeekDashdemuxSendsData;
+  test_callbacks.demux_sent_event = testParallelSeekDashdemuxSendsEvent;
+
+  testData = gst_dash_demux_test_case_new ();
+  COPY_OUTPUT_TEST_DATA (outputTestData, testData);
+
+  gst_adaptive_demux_test_run (DEMUX_ELEMENT_NAME, "http://unit.test/test.mpd",
+      &test_callbacks, testData);
+
+  g_object_unref (testData);
+  if (http_src_test_data.data)
+    gst_structure_free (http_src_test_data.data);
 }
 
 GST_END_TEST;
@@ -2185,6 +2598,7 @@ dash_demux_suite (void)
   tcase_add_test (tc_basicTests, testSeekSnapAfterPosition);
   tcase_add_test (tc_basicTests, testReverseSeekSnapBeforePosition);
   tcase_add_test (tc_basicTests, testReverseSeekSnapAfterPosition);
+  tcase_add_test (tc_basicTests, testParallelSeek);
   tcase_add_test (tc_basicTests, testDownloadError);
   tcase_add_test (tc_basicTests, testHeaderDownloadError);
   tcase_add_test (tc_basicTests, testMediaDownloadErrorLastFragment);

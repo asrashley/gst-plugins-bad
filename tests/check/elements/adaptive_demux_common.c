@@ -52,6 +52,10 @@ gst_adaptive_demux_test_case_init (GstAdaptiveDemuxTestCase * testData)
   g_rec_mutex_init (&testData->test_task_lock);
   g_mutex_init (&testData->test_task_state_lock);
   g_cond_init (&testData->test_task_state_cond);
+  testData->test_task2 = NULL;
+  g_rec_mutex_init (&testData->test_task_lock2);
+  g_mutex_init (&testData->test_task_state_lock2);
+  g_cond_init (&testData->test_task_state_cond2);
 
   gst_adaptive_demux_test_case_clear (testData);
 }
@@ -70,8 +74,15 @@ gst_adaptive_demux_test_case_clear (GstAdaptiveDemuxTestCase * testData)
     gst_object_unref (testData->test_task);
     testData->test_task = NULL;
   }
+  if (testData->test_task2) {
+    gst_task_stop (testData->test_task2);
+    gst_task_join (testData->test_task2);
+    gst_object_unref (testData->test_task2);
+    testData->test_task2 = NULL;
+  }
   testData->signal_context = NULL;
   testData->test_task_state = TEST_TASK_STATE_NOT_STARTED;
+  testData->test_task_state2 = TEST_TASK_STATE_NOT_STARTED;
   testData->threshold_for_seek = 0;
   gst_event_replace (&testData->seek_event, NULL);
   testData->signal_context = NULL;
@@ -102,6 +113,15 @@ gst_adaptive_demux_test_case_finalize (GObject * object)
     gst_object_unref (testData->test_task);
     testData->test_task = NULL;
   }
+  g_cond_clear (&testData->test_task_state_cond2);
+  g_mutex_clear (&testData->test_task_state_lock2);
+  g_rec_mutex_clear (&testData->test_task_lock2);
+  if (testData->test_task2) {
+    gst_task_stop (testData->test_task2);
+    gst_task_join (testData->test_task2);
+    gst_object_unref (testData->test_task2);
+    testData->test_task2 = NULL;
+  }
   if (testData->output_streams) {
     g_list_free (testData->output_streams);
     testData->output_streams = NULL;
@@ -123,6 +143,39 @@ gst_adaptive_demux_test_case_new (void)
   return g_object_newv (GST_TYPE_ADAPTIVE_DEMUX_TEST_CASE, 0, NULL);
 }
 
+void
+gst_adaptive_demux_test_barrier_init (GstAdaptiveDemuxTestBarrier * barrier,
+    guint runners)
+{
+  g_cond_init (&barrier->condition);
+  g_mutex_init (&barrier->mutex);
+  barrier->count = 0;
+  barrier->runners = runners;
+}
+
+void
+gst_adaptive_demux_test_barrier_clear (GstAdaptiveDemuxTestBarrier * barrier)
+{
+  g_cond_clear (&barrier->condition);
+  g_mutex_clear (&barrier->mutex);
+  barrier->count = 0;
+  barrier->runners = 0;
+}
+
+void
+gst_adaptive_demux_test_barrier_wait (GstAdaptiveDemuxTestBarrier * barrier)
+{
+  g_mutex_lock (&barrier->mutex);
+  ++barrier->count;
+  if (barrier->count == barrier->runners) {
+    g_cond_broadcast (&barrier->condition);
+  } else {
+    while (barrier->count != barrier->runners) {
+      g_cond_wait (&barrier->condition, &barrier->mutex);
+    }
+  }
+  g_mutex_unlock (&barrier->mutex);
+}
 
 GstAdaptiveDemuxTestExpectedOutput *
 gst_adaptive_demux_test_find_test_data_by_stream (GstAdaptiveDemuxTestCase *
