@@ -52,6 +52,7 @@ gst_adaptive_demux_test_case_init (GstAdaptiveDemuxTestCase * testData)
   g_rec_mutex_init (&testData->test_task_lock);
   g_mutex_init (&testData->test_task_state_lock);
   g_cond_init (&testData->test_task_state_cond);
+
   gst_adaptive_demux_test_case_clear (testData);
 }
 
