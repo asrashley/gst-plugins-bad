@@ -200,8 +200,8 @@ enum
 #define DEFAULT_PRESENTATION_DELAY     NULL     /* zero */
 
 /* Clock drift compensation for live streams */
-#define SLOW_CLOCK_UPDATE_INTERVAL  (1000000 * 30 * 60) /* 30 minutes */
-#define FAST_CLOCK_UPDATE_INTERVAL  (1000000 * 30)      /* 30 seconds */
+#define SLOW_CLOCK_UPDATE_INTERVAL  (GST_SECOND * 30 * 60)      /* 30 minutes */
+#define FAST_CLOCK_UPDATE_INTERVAL  (GST_SECOND * 30)   /* 30 seconds */
 #define SUPPORTED_CLOCK_FORMATS (GST_MPD_UTCTIMING_TYPE_NTP | GST_MPD_UTCTIMING_TYPE_HTTP_HEAD | GST_MPD_UTCTIMING_TYPE_HTTP_XSDATE | GST_MPD_UTCTIMING_TYPE_HTTP_ISO | GST_MPD_UTCTIMING_TYPE_HTTP_NTP)
 #define NTP_TO_UNIX_EPOCH G_GUINT64_CONSTANT(2208988800)        /* difference (in seconds) between NTP epoch and Unix epoch */
 
@@ -210,7 +210,7 @@ struct _GstDashDemuxClockDrift
   GMutex clock_lock;            /* used to protect access to struct */
   gchar *selected_url;
   GstMPDUTCTimingType selected_method;
-  gint64 next_update;
+  GstClockTime next_update;
   /* @clock_compensation: amount (in usecs) to add to client's idea of
      now to map it to the server's idea of now */
   GTimeSpan clock_compensation;
@@ -1772,8 +1772,7 @@ gst_dash_demux_clock_drift_new (GstDashDemux * demux)
   clock_drift = g_slice_new0 (GstDashDemuxClockDrift);
   g_mutex_init (&clock_drift->clock_lock);
   clock_drift->next_update =
-      GST_TIME_AS_USECONDS (gst_adaptive_demux_get_monotonic_time
-      (GST_ADAPTIVE_DEMUX_CAST (demux)));
+      gst_adaptive_demux_get_monotonic_time (GST_ADAPTIVE_DEMUX_CAST (demux));
   clock_drift->selected_method = SUPPORTED_CLOCK_FORMATS;
   return clock_drift;
 }
@@ -2046,7 +2045,7 @@ static gboolean
 gst_dash_demux_poll_clock_drift (GstDashDemux * demux)
 {
   GstDashDemuxClockDrift *clock_drift;
-  gint64 now;
+  GstClockTime now;
   GstMPDUTCTimingType method;
   gchar **urls;
   guint current_index, i, leng;
@@ -2055,19 +2054,22 @@ gst_dash_demux_poll_clock_drift (GstDashDemux * demux)
   g_return_val_if_fail (demux != NULL, FALSE);
   g_return_val_if_fail (demux->clock_drift != NULL, FALSE);
   clock_drift = demux->clock_drift;
-  now =
-      GST_TIME_AS_USECONDS (gst_adaptive_demux_get_monotonic_time
-      (GST_ADAPTIVE_DEMUX_CAST (demux)));
+  now = gst_adaptive_demux_get_monotonic_time (GST_ADAPTIVE_DEMUX_CAST (demux));
   g_mutex_lock (&clock_drift->clock_lock);
   urls = gst_mpd_client_get_utc_timing_sources (demux->client,
       clock_drift->selected_method, &method);
   if (!urls && clock_drift->selected_method != SUPPORTED_CLOCK_FORMATS) {
     /* If the currently selected method was removed during a manifest
        update, try switching to another method */
-    urls = gst_mpd_client_get_utc_timing_sources (demux->client,
+    GST_INFO_OBJECT (demux,
+        "Currently selected UTC timing method 0x%x is no longer listed in the manifest, searching for a new method",
+        clock_drift->selected_method);
+    urls =
+        gst_mpd_client_get_utc_timing_sources (demux->client,
         SUPPORTED_CLOCK_FORMATS & ~clock_drift->selected_method, &method);
   }
   if (!urls) {
+    GST_WARNING_OBJECT (demux, "Unable to find a supported UTC timing source");
     goto fail;
   }
 
@@ -2081,6 +2083,13 @@ gst_dash_demux_poll_clock_drift (GstDashDemux * demux)
   }
   if (clock_drift->selected_url == NULL || !urls[current_index]
       || method != clock_drift->selected_method) {
+#ifndef GST_DISABLE_GST_DEBUG
+    if (clock_drift->selected_url) {
+      GST_INFO_OBJECT (demux,
+          "Previous UTC timing source \"%s\" no longer listed in manifest, selecting new source",
+          clock_drift->selected_url);
+    }
+#endif
     current_index = g_random_int_range (0, leng);
     reset = TRUE;
   }
@@ -2112,9 +2121,9 @@ gst_dash_demux_poll_clock_drift (GstDashDemux * demux)
     }
     if (gst_dash_demux_poll_clock_drift_server (demux)) {
       clock_drift->next_update =
-          now + (method ==
-          GST_MPD_UTCTIMING_TYPE_NTP) ? FAST_CLOCK_UPDATE_INTERVAL :
-          SLOW_CLOCK_UPDATE_INTERVAL;
+          now + ((method ==
+              GST_MPD_UTCTIMING_TYPE_NTP) ? (FAST_CLOCK_UPDATE_INTERVAL) :
+          (SLOW_CLOCK_UPDATE_INTERVAL));
       g_mutex_unlock (&clock_drift->clock_lock);
       return TRUE;
     }
