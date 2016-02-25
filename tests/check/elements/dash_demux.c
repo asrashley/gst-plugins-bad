@@ -227,6 +227,8 @@ gst_dashdemux_http_src_create_mock_time_server (GstTestHTTPSrc * src,
 {
   const GstDashDemuxTestInputData *input =
       (const GstDashDemuxTestInputData *) context;
+  const GstTestHTTPSrcTestData *test_case =
+      (const GstTestHTTPSrcTestData *) user_data;
   GDateTime *now;
   GDateTime *newTime;
   GstMapInfo info;
@@ -246,6 +248,7 @@ gst_dashdemux_http_src_create_mock_time_server (GstTestHTTPSrc * src,
 
   if (g_strcmp0 (input->uri, "http://mocktime/http-xsdate") == 0) {
     gchar *newTimeString;
+    guint access_count = 0;
     newTimeString =
         g_strdup_printf ("%04d-%02d-%02dT%02d:%02d:%02d.%06dZ",
         g_date_time_get_year (newTime),
@@ -259,6 +262,13 @@ gst_dashdemux_http_src_create_mock_time_server (GstTestHTTPSrc * src,
        so that the buffer does not contain the zero terminator */
     buf = gst_buffer_new_wrapped (newTimeString, strlen (newTimeString));
     fail_if (buf == NULL, "Not enough memory to allocate buffer");
+    if (test_case->data != NULL) {
+      gst_structure_get_uint (test_case->data, "clock-request-count",
+          &access_count);
+      access_count++;
+      gst_structure_set (test_case->data, "clock-request-count", G_TYPE_UINT,
+          access_count, NULL);
+    }
   } else if (g_strcmp0 (input->uri, "http://mocktime/http-ntp") == 0) {
     guint64 fraction;
 
@@ -2895,8 +2905,6 @@ testClockCompensationCheckDataReceived (GstAdaptiveDemuxTestEngine * engine,
        * See https://bugzilla.gnome.org/show_bug.cgi?id=753751
        */
       fail_unless (segment_end >= 12 * GST_SECOND && segment_end <= streamTime);
-    } else {
-      fail ("unexpected totalReceivedSize");
     }
     gst_query_unref (query);
   }
@@ -2920,32 +2928,19 @@ testClockCompensationCheckDataReceived (GstAdaptiveDemuxTestEngine * engine,
   return TRUE;
 }
 
-/*
- * Test clock compensation during a live stream.
- *
- * There are 4 segments, 3s each.
- * We set the mpd availability 6s before now.
- * The server is 3s ahead of the client, which means it is currently generating
- * segment 4.
- * We expect the client to download segment 4 and to wait for it to
- * be available.
- *
- */
-GST_START_TEST (testClockCompensationHttpXSdate)
+static void
+run_clock_compensation_http_xsdate_test (guint minimumUpdatePeriod)
 {
   gchar *mpd;
-  const gchar *mpd_1 =
+  const gchar *mpd_fmt =
       "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
       "<MPD xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\""
       "     xmlns=\"urn:mpeg:DASH:schema:MPD:2011\""
       "     xsi:schemaLocation=\"urn:mpeg:DASH:schema:MPD:2011 DASH-MPD.xsd\""
       "     profiles=\"urn:mpeg:dash:profile:isoff-live:2011\""
-      "     type=\"dynamic\" availabilityStartTime=\"";
-  GDateTime *availabilityStartTime;
-  gchar *availabilityStartTimeString;
-  const gchar *mpd_2 = "\""
+      "     type=\"dynamic\" availabilityStartTime=\"%s\""
       "     minBufferTime=\"PT1.500S\""
-      "     minimumUpdatePeriod=\"PT500S\">"
+      "     minimumUpdatePeriod=\"PT%dS\">"
       "  <UTCTiming schemeIdUri=\"urn:mpeg:dash:utc:http-xsdate:2014\" value=\"http://mocktime/http-xsdate\"/>"
       "  <Period>"
       "    <AdaptationSet mimeType=\"audio/webm\""
@@ -2964,6 +2959,8 @@ GST_START_TEST (testClockCompensationHttpXSdate)
       "        </SegmentTemplate>"
       "      </Representation></AdaptationSet></Period></MPD>";
 
+  GDateTime *availabilityStartTime;
+  gchar *availabilityStartTimeString;
   GstDashDemuxTestInputData inputTestData[] = {
     {"http://unit.test/test.mpd", NULL, 0},
     {"http://mocktime/http-xsdate", (guint8 *) "3", 0}, /* server is 3s ahead */
@@ -2971,23 +2968,28 @@ GST_START_TEST (testClockCompensationHttpXSdate)
     {"http://unit.test/audio2.webm", NULL, 2000},
     {"http://unit.test/audio3.webm", NULL, 3000},
     {"http://unit.test/audio4.webm", NULL, 4000},
+    {"http://unit.test/audio5.webm", NULL, 4100},
+    {"http://unit.test/audio6.webm", NULL, 4200},
     {NULL, NULL, 0},
   };
   GstAdaptiveDemuxTestExpectedOutput outputTestData[] = {
-    {"audio_00", 4000, NULL},
+    {"audio_00", 4000 + 4100 + 4200, NULL},
   };
   GstTestHTTPSrcCallbacks http_src_callbacks = { 0 };
   GstTestHTTPSrcTestData http_src_test_data = { 0 };
   GstAdaptiveDemuxTestCallbacks test_callbacks = { 0 };
   GstDashDemuxTestCase *testData;
   GstClock *clock;
+  guint access_count = 0;
 
-  clock = gst_test_clock_new ();
+  clock = gst_test_clock_new_with_start_time (GST_SECOND * 3600);
   gst_system_clock_set_default (clock);
 
   availabilityStartTime = timeFromNow (-6);
   availabilityStartTimeString = toXSDateTime (availabilityStartTime);
-  mpd = g_strdup_printf ("%s%s%s", mpd_1, availabilityStartTimeString, mpd_2);
+  mpd =
+      g_strdup_printf (mpd_fmt, availabilityStartTimeString,
+      minimumUpdatePeriod);
   g_free (availabilityStartTimeString);
   inputTestData[0].payload = (guint8 *) mpd;
 
@@ -2995,6 +2997,7 @@ GST_START_TEST (testClockCompensationHttpXSdate)
   http_src_callbacks.src_create =
       gst_dashdemux_http_src_create_mock_time_server;
   http_src_test_data.input = inputTestData;
+  http_src_test_data.data = gst_structure_new_empty (__FUNCTION__);
   gst_test_http_src_install_callbacks (&http_src_callbacks,
       &http_src_test_data);
 
@@ -3009,12 +3012,52 @@ GST_START_TEST (testClockCompensationHttpXSdate)
   gst_adaptive_demux_test_run (DEMUX_ELEMENT_NAME, "http://unit.test/test.mpd",
       &test_callbacks, testData);
 
+  fail_unless (gst_structure_has_field_typed
+      (http_src_test_data.data, "clock-request-count", G_TYPE_UINT));
+  gst_structure_get_uint (http_src_test_data.data, "clock-request-count",
+      &access_count);
+  assert_equals_int (access_count, 1);
   g_object_unref (testData);
-  if (http_src_test_data.data)
-    gst_structure_free (http_src_test_data.data);
+  gst_structure_free (http_src_test_data.data);
   g_free (mpd);
   gst_system_clock_set_default (NULL);
   gst_object_unref (clock);
+}
+
+/*
+ * Test clock compensation during a live stream.
+ *
+ * There are 6 segments, 3s each.
+ * We set the mpd availability 6s before now.
+ * The server is 3s ahead of the client, which means it is currently generating
+ * segment 4.
+ * We expect the client to download segment 4 and to wait for it to
+ * be available.
+ *
+ */
+GST_START_TEST (testClockCompensationHttpXSdate)
+{
+  run_clock_compensation_http_xsdate_test (500);
+}
+
+GST_END_TEST;
+
+/*
+ * Test clock compensation during a live stream, where the manifest
+ * updates during the test. This is to test that a refresh of the
+ * manifest does not cause extra requests to the time server.
+ *
+ * There are 6 segments, 3s each.
+ * We set the mpd availability 6s before now.
+ * The server is 3s ahead of the client, which means it is currently generating
+ * segment 4.
+ * We expect the client to download segment 4 and to wait for it to
+ * be available.
+ *
+ */
+GST_START_TEST (testClockCompensationHttpXSdateWithManifestRefresh)
+{
+  run_clock_compensation_http_xsdate_test (3);
 }
 
 GST_END_TEST;
@@ -3286,6 +3329,8 @@ dash_demux_suite (void)
   tcase_add_test (tc_liveTests, testQueryLiveStream);
   tcase_add_test (tc_liveTests, testSeekLiveStream);
   tcase_add_test (tc_liveTests, testClockCompensationHttpXSdate);
+  tcase_add_test (tc_liveTests,
+      testClockCompensationHttpXSdateWithManifestRefresh);
   tcase_add_test (tc_liveTests, testClockCompensationHttpHead);
   tcase_add_test (tc_liveTests, testClockCompensationHttpNtp);
 
