@@ -233,6 +233,7 @@ gst_dashdemux_http_src_create_mock_time_server (GstTestHTTPSrc * src,
   GDateTime *newTime;
   GstMapInfo info;
   GstBuffer *buf;
+  guint access_count = 0;
 
   if (!g_str_has_prefix (input->uri, "http://mocktime")) {
     return gst_dashdemux_http_src_create (src, offset, length, retbuf, context,
@@ -248,7 +249,6 @@ gst_dashdemux_http_src_create_mock_time_server (GstTestHTTPSrc * src,
 
   if (g_strcmp0 (input->uri, "http://mocktime/http-xsdate") == 0) {
     gchar *newTimeString;
-    guint access_count = 0;
     newTimeString =
         g_strdup_printf ("%04d-%02d-%02dT%02d:%02d:%02d.%06dZ",
         g_date_time_get_year (newTime),
@@ -263,11 +263,11 @@ gst_dashdemux_http_src_create_mock_time_server (GstTestHTTPSrc * src,
     buf = gst_buffer_new_wrapped (newTimeString, strlen (newTimeString));
     fail_if (buf == NULL, "Not enough memory to allocate buffer");
     if (test_case->data != NULL) {
-      gst_structure_get_uint (test_case->data, "clock-request-count",
+      gst_structure_get_uint (test_case->data, "http-xsdate-request-count",
           &access_count);
       access_count++;
-      gst_structure_set (test_case->data, "clock-request-count", G_TYPE_UINT,
-          access_count, NULL);
+      gst_structure_set (test_case->data, "http-xsdate-request-count",
+          G_TYPE_UINT, access_count, NULL);
     }
   } else if (g_strcmp0 (input->uri, "http://mocktime/http-ntp") == 0) {
     guint64 fraction;
@@ -283,6 +283,13 @@ gst_dashdemux_http_src_create_mock_time_server (GstTestHTTPSrc * src,
     GST_WRITE_UINT32_BE (info.data + 4, fraction);
 
     gst_buffer_unmap (buf, &info);
+    if (test_case->data != NULL) {
+      gst_structure_get_uint (test_case->data, "http-ntp-request-count",
+          &access_count);
+      access_count++;
+      gst_structure_set (test_case->data, "http-ntp-request-count", G_TYPE_UINT,
+          access_count, NULL);
+    }
 
   } else {
     g_date_time_unref (newTime);
@@ -2840,6 +2847,46 @@ GST_START_TEST (testSeekLiveStream)
 
 GST_END_TEST;
 
+/**
+ * gst_dashdemux_test_download_once_src_start:
+ * A version of the src_start function that only allows an entry from
+ * GstTestHTTPSrcInput to be used once. Useful for cases such as
+ * returning a different manifest when performing a refresh of a live
+ * stream.
+ */
+static gboolean
+gst_dashdemux_test_download_once_src_start (GstTestHTTPSrc * src,
+    const gchar * uri, GstTestHTTPSrcInput * input_data, gpointer user_data)
+{
+  const GstTestHTTPSrcTestData *test_case =
+      (const GstTestHTTPSrcTestData *) user_data;
+  guint64 once_mask = 0;
+  guint64 always_mask = 0;
+
+  gst_structure_get (test_case->data, "download-once",
+      GST_TYPE_BITMASK, &once_mask, NULL);
+  gst_structure_get (test_case->data, "download-always",
+      GST_TYPE_BITMASK, &always_mask, NULL);
+  for (guint i = 0; test_case->input[i].uri; ++i) {
+    if (strcmp (test_case->input[i].uri, uri) == 0) {
+      guint64 bitpos = G_GUINT64_CONSTANT (1) << i;
+      if ((once_mask & bitpos) && !(always_mask & bitpos)) {
+        GST_DEBUG ("already used entry %d", i);
+        continue;
+      }
+      input_data->context = (gpointer) & test_case->input[i];
+      input_data->size = test_case->input[i].size;
+      if (test_case->input[i].size == 0)
+        input_data->size = strlen ((gchar *) test_case->input[i].payload);
+      GST_DEBUG ("open URI %d: %s", i, uri);
+      once_mask |= bitpos;
+      gst_structure_set (test_case->data, "download-once",
+          GST_TYPE_BITMASK, once_mask, NULL);
+      return TRUE;
+    }
+  }
+  return FALSE;
+}
 
 /* function to validate data received by AppSink */
 static gboolean
@@ -3013,8 +3060,8 @@ run_clock_compensation_http_xsdate_test (guint minimumUpdatePeriod)
       &test_callbacks, testData);
 
   fail_unless (gst_structure_has_field_typed
-      (http_src_test_data.data, "clock-request-count", G_TYPE_UINT));
-  gst_structure_get_uint (http_src_test_data.data, "clock-request-count",
+      (http_src_test_data.data, "http-xsdate-request-count", G_TYPE_UINT));
+  gst_structure_get_uint (http_src_test_data.data, "http-xsdate-request-count",
       &access_count);
   assert_equals_int (access_count, 1);
   g_object_unref (testData);
@@ -3058,6 +3105,124 @@ GST_END_TEST;
 GST_START_TEST (testClockCompensationHttpXSdateWithManifestRefresh)
 {
   run_clock_compensation_http_xsdate_test (3);
+}
+
+GST_END_TEST;
+
+/*
+ * Test clock compensation during a live stream, where the manifest
+ * updates during the test. This is to test that a refresh of the
+ * manifest that changes the supported UTC timing method causes dashdemux
+ * to switch to the new method.
+ *
+ */
+GST_START_TEST (testClockCompensationMethodChange)
+{
+  const gchar *mpd_fmt =
+      "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
+      "<MPD xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\""
+      "     xmlns=\"urn:mpeg:DASH:schema:MPD:2011\""
+      "     xsi:schemaLocation=\"urn:mpeg:DASH:schema:MPD:2011 DASH-MPD.xsd\""
+      "     profiles=\"urn:mpeg:dash:profile:isoff-live:2011\""
+      "     type=\"dynamic\" availabilityStartTime=\"%s\""
+      "     minBufferTime=\"PT1.500S\""
+      "     minimumUpdatePeriod=\"PT3S\">"
+      "  <UTCTiming schemeIdUri=\"%s\" value=\"%s\"/>"
+      "  <Period>"
+      "    <AdaptationSet mimeType=\"audio/webm\""
+      "                   subsegmentAlignment=\"true\">"
+      "      <Representation id=\"171\""
+      "                      codecs=\"vorbis\""
+      "                      audioSamplingRate=\"44100\""
+      "                      startWithSAP=\"1\""
+      "                      bandwidth=\"129553\">"
+      "        <AudioChannelConfiguration"
+      "           schemeIdUri=\"urn:mpeg:dash:23003:3:audio_channel_configuration:2011\""
+      "           value=\"2\" />"
+      "        <SegmentTemplate duration=\"3\""
+      "                         media=\"audio$Number$.webm\""
+      "                         >"
+      "        </SegmentTemplate>"
+      "      </Representation></AdaptationSet></Period></MPD>";
+
+  gchar *mpd1, *mpd2;
+  GDateTime *availabilityStartTime;
+  gchar *availabilityStartTimeString;
+  GstDashDemuxTestInputData inputTestData[] = {
+    {"http://unit.test/test.mpd", NULL, 0},
+    {"http://unit.test/test.mpd", NULL, 0},
+    {"http://mocktime/http-xsdate", (guint8 *) "3", 0}, /* server is 3s ahead */
+    {"http://mocktime/http-ntp", (guint8 *) "3", 0},    /* server is 3s ahead */
+    {"http://unit.test/audio1.webm", NULL, 1000},
+    {"http://unit.test/audio2.webm", NULL, 2000},
+    {"http://unit.test/audio3.webm", NULL, 3000},
+    {"http://unit.test/audio4.webm", NULL, 4000},
+    {"http://unit.test/audio5.webm", NULL, 4100},
+    {"http://unit.test/audio6.webm", NULL, 4200},
+    {NULL, NULL, 0},
+  };
+  GstAdaptiveDemuxTestExpectedOutput outputTestData[] = {
+    {"audio_00", 4000 + 4100 + 4200, NULL},
+  };
+  GstTestHTTPSrcCallbacks http_src_callbacks = { 0 };
+  GstTestHTTPSrcTestData http_src_test_data = { 0 };
+  GstAdaptiveDemuxTestCallbacks test_callbacks = { 0 };
+  GstDashDemuxTestCase *testData;
+  GstClock *clock;
+  guint access_count = 0;
+  const guint64 download_always_mask = ~1;
+
+  clock = gst_test_clock_new_with_start_time (GST_SECOND * 3600);
+  gst_system_clock_set_default (clock);
+
+  availabilityStartTime = timeFromNow (-6);
+  availabilityStartTimeString = toXSDateTime (availabilityStartTime);
+  mpd1 =
+      g_strdup_printf (mpd_fmt, availabilityStartTimeString,
+      "urn:mpeg:dash:utc:http-xsdate:2014", "http://mocktime/http-xsdate");
+  mpd2 =
+      g_strdup_printf (mpd_fmt, availabilityStartTimeString,
+      "urn:mpeg:dash:utc:http-ntp:2014", "http://mocktime/http-ntp");
+  g_free (availabilityStartTimeString);
+  inputTestData[0].payload = (guint8 *) mpd1;
+  inputTestData[1].payload = (guint8 *) mpd2;
+
+  http_src_callbacks.src_start = gst_dashdemux_test_download_once_src_start;
+  http_src_callbacks.src_create =
+      gst_dashdemux_http_src_create_mock_time_server;
+  http_src_test_data.input = inputTestData;
+  http_src_test_data.data = gst_structure_new (__FUNCTION__,
+      "download-always", GST_TYPE_BITMASK, download_always_mask, NULL);
+  gst_test_http_src_install_callbacks (&http_src_callbacks,
+      &http_src_test_data);
+
+  test_callbacks.appsink_received_data = testClockCompensationCheckDataReceived;
+  test_callbacks.appsink_eos = gst_adaptive_demux_test_unexpected_eos;
+
+  testData = gst_dash_demux_test_case_new ();
+  COPY_OUTPUT_TEST_DATA (outputTestData, testData);
+  testData->availabilityStartTime = availabilityStartTime;
+  testData->clockCompensation = 3;      /* server is 3s ahead */
+
+  gst_adaptive_demux_test_run (DEMUX_ELEMENT_NAME, "http://unit.test/test.mpd",
+      &test_callbacks, testData);
+
+  fail_unless (gst_structure_has_field_typed
+      (http_src_test_data.data, "http-xsdate-request-count", G_TYPE_UINT));
+  gst_structure_get_uint (http_src_test_data.data, "http-xsdate-request-count",
+      &access_count);
+  assert_equals_int (access_count, 1);
+  fail_unless (gst_structure_has_field_typed
+      (http_src_test_data.data, "http-ntp-request-count", G_TYPE_UINT));
+  gst_structure_get_uint (http_src_test_data.data, "http-ntp-request-count",
+      &access_count);
+  assert_equals_int (access_count, 1);
+  g_object_unref (testData);
+  gst_structure_free (http_src_test_data.data);
+  g_free (mpd1);
+  g_free (mpd2);
+  gst_system_clock_set_default (NULL);
+  gst_object_unref (clock);
 }
 
 GST_END_TEST;
@@ -3333,6 +3498,7 @@ dash_demux_suite (void)
       testClockCompensationHttpXSdateWithManifestRefresh);
   tcase_add_test (tc_liveTests, testClockCompensationHttpHead);
   tcase_add_test (tc_liveTests, testClockCompensationHttpNtp);
+  tcase_add_test (tc_liveTests, testClockCompensationMethodChange);
 
   tcase_add_unchecked_fixture (tc_basicTests, gst_adaptive_demux_test_setup,
       gst_adaptive_demux_test_teardown);
