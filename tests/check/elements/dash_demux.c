@@ -149,17 +149,49 @@ gst_dash_demux_test_case_finalize (GObject * object)
 }
 
 static gboolean
+append_request_uri (GQuark field_id, GValue * value, gpointer user_data)
+{
+  const GQuark request_field = g_quark_from_string ("requests");
+  GValue uri_val = G_VALUE_INIT;
+
+  if (request_field == field_id) {
+    g_value_init (&uri_val, G_TYPE_STRING);
+    g_value_set_string (&uri_val, (const gchar *) user_data);
+    gst_value_array_append_value (value, &uri_val);
+    g_value_unset (&uri_val);
+  }
+  return TRUE;
+}
+
+static gboolean
 gst_dashdemux_http_src_start (GstTestHTTPSrc * src,
     const gchar * uri, GstTestHTTPSrcInput * input_data, gpointer user_data)
 {
   const GstTestHTTPSrcTestData *test_case =
       (const GstTestHTTPSrcTestData *) user_data;
+
   for (guint i = 0; test_case->input[i].uri; ++i) {
     if (g_strcmp0 (test_case->input[i].uri, uri) == 0) {
       input_data->context = (gpointer) & test_case->input[i];
       input_data->size = test_case->input[i].size;
       if (test_case->input[i].size == 0)
         input_data->size = strlen ((gchar *) test_case->input[i].payload);
+      if (test_case->data
+          && gst_structure_has_field (test_case->data, "requests")) {
+        gst_structure_map_in_place (test_case->data, append_request_uri,
+            (gpointer) uri);
+      } else if (test_case->data) {
+        GValue requests = G_VALUE_INIT;
+        GValue uri_val = G_VALUE_INIT;
+
+        g_value_init (&requests, GST_TYPE_ARRAY);
+        g_value_init (&uri_val, G_TYPE_STRING);
+        g_value_set_string (&uri_val, uri);
+        gst_value_array_append_value (&requests, &uri_val);
+        gst_structure_set_value (test_case->data, "requests", &requests);
+        g_value_unset (&uri_val);
+        g_value_unset (&requests);
+      }
       return TRUE;
     }
   }
@@ -3463,6 +3495,218 @@ GST_START_TEST (testClockCompensationHttpNtp)
 
 GST_END_TEST;
 
+static gboolean
+testLiveStreamManifestRefreshCheckDataReceived (GstAdaptiveDemuxTestEngine *
+    engine, GstAdaptiveDemuxTestOutputStream * stream, GstBuffer * buffer,
+    gpointer user_data)
+{
+  GstDashDemuxTestCase *testData = GST_DASH_DEMUX_TEST_CASE (user_data);
+  GstAdaptiveDemuxTestCase *commonData =
+      GST_ADAPTIVE_DEMUX_TEST_CASE (testData);
+  GstAdaptiveDemuxTestExpectedOutput *testOutputStreamData;
+
+  testOutputStreamData =
+      gst_adaptive_demux_test_find_test_data_by_stream
+      (GST_ADAPTIVE_DEMUX_TEST_CASE (testData), stream, NULL);
+  fail_unless (testOutputStreamData != NULL);
+
+  /*
+     Once this test passes, the call to 
+     gst_adaptive_demux_test_check_received_data should be re-enabled.
+     It is commented out to make it easier to see the bug of not dowloading
+     the init segment.
+     gst_adaptive_demux_test_check_received_data (engine, stream, buffer,
+     user_data); */
+
+  /* for a live stream, no EOS signal is sent, so we must monitor the amount
+   * of data received.
+   */
+  if ((stream->total_received_size +
+          stream->segment_received_size +
+          gst_buffer_get_size (buffer)) >=
+      testOutputStreamData->expected_size) {
+
+    /* signal to the application that another stream has finished */
+    commonData->count_of_finished_streams++;
+
+    if (commonData->count_of_finished_streams ==
+        g_list_length (commonData->output_streams)) {
+      g_main_loop_quit (engine->loop);
+    }
+  }
+
+  return TRUE;
+}
+
+/**
+ * select_bitrate:
+ * This function is used for force adaptive demux to cycle between
+ * every bitrate
+ */
+static guint64
+select_bitrate (GstElement * object, guint64 currently_selected_bitrate,
+    guint64 bitrate, gpointer user_data)
+{
+  static const guint64 bitrates[] = { 300000, 450000, 750000, 0 };
+  guint i;
+  gint cur = -1;
+
+  for (i = 0; bitrates[i]; ++i) {
+    if (currently_selected_bitrate == bitrates[i]) {
+      cur = i;
+      break;
+    }
+  }
+  if (cur < 0 || bitrates[cur + 1] == 0) {
+    GST_DEBUG ("Select bitrate %" G_GUINT64_FORMAT "\n", bitrates[0]);
+    return bitrates[0];
+  }
+  GST_DEBUG ("Select bitrate %" G_GUINT64_FORMAT "\n", bitrates[cur + 1]);
+  return bitrates[cur + 1];
+}
+
+static void
+connect_abr_signals (GstAdaptiveDemuxTestEngine * engine, gpointer user_data)
+{
+  GstAdaptiveDemuxTestCase *testData = GST_ADAPTIVE_DEMUX_TEST_CASE (user_data);
+
+  g_signal_connect (G_OBJECT (engine->demux),
+      "select-bitrate", G_CALLBACK (select_bitrate), testData);
+}
+
+/**
+ * testBitrateSwitchingDuringManifestRefresh:
+ * Check that dashdemux correctly downloads the correct initialisation
+ * segment when it changes bitrate, even if the minimumUpdatePeriod is
+ * set to a value that causes the manifest to be refreshed for every
+ * segment.
+ */
+GST_START_TEST (testBitrateSwitchingDuringManifestRefresh)
+{
+  gchar *mpd;
+  const gchar *mpd_fmt =
+      "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
+      "<MPD xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\""
+      "     xmlns=\"urn:mpeg:DASH:schema:MPD:2011\""
+      "     xsi:schemaLocation=\"urn:mpeg:DASH:schema:MPD:2011 DASH-MPD.xsd\""
+      "     profiles=\"urn:mpeg:dash:profile:isoff-live:2011\""
+      "     type=\"dynamic\" availabilityStartTime=\"%s\""
+      "     minBufferTime=\"PT1.500S\""
+      "     minimumUpdatePeriod=\"PT3S\">"
+      "  <Period>"
+      "    <AdaptationSet contentType=\"video\" mimeType=\"video/mp4\""
+      "                   segmentAlignment=\"true\" startWithSAP=\"1\">"
+      "        <SegmentTemplate duration=\"3000\" timescale=\"1000\""
+      "                         initialization=\"$RepresentationID$/init.mp4\""
+      "                         media=\"$RepresentationID$/$Number$.mp4\""
+      "                         />"
+      "        <Representation bandwidth=\"300000\" codecs=\"avc1.64001e\" frameRate=\"25\" height=\"288\" id=\"V300\" sar=\"1:1\" width=\"360\"/>"
+      "        <Representation bandwidth=\"450000\" codecs=\"avc1.64001e\" frameRate=\"25\" height=\"576\" id=\"V450\" sar=\"2:1\" width=\"432\"/>"
+      "        <Representation bandwidth=\"750000\" codecs=\"avc1.64001e\" frameRate=\"25\" height=\"576\" id=\"V750\" sar=\"1:1\" width=\"720\"/>"
+      "    </AdaptationSet></Period></MPD>";
+  GDateTime *availabilityStartTime;
+  gchar *availabilityStartTimeString;
+  GstDashDemuxTestInputData inputTestData[] = {
+    {"http://unit.test/test.mpd", NULL, 0},
+    {"http://unit.test/V300/init.mp4", NULL, 100},
+    {"http://unit.test/V300/2.mp4", NULL, 1002},
+    {"http://unit.test/V300/3.mp4", NULL, 1003},
+    {"http://unit.test/V300/4.mp4", NULL, 1004},
+    {"http://unit.test/V300/5.mp4", NULL, 1005},
+    {"http://unit.test/V300/6.mp4", NULL, 1006},
+    {"http://unit.test/V300/7.mp4", NULL, 1007},
+    {"http://unit.test/V450/init.mp4", NULL, 200},
+    {"http://unit.test/V450/2.mp4", NULL, 2002},
+    {"http://unit.test/V450/3.mp4", NULL, 2003},
+    {"http://unit.test/V450/4.mp4", NULL, 2004},
+    {"http://unit.test/V450/5.mp4", NULL, 2005},
+    {"http://unit.test/V450/6.mp4", NULL, 2006},
+    {"http://unit.test/V750/init.mp4", NULL, 300},
+    {"http://unit.test/V750/2.mp4", NULL, 3002},
+    {"http://unit.test/V750/3.mp4", NULL, 3003},
+    {"http://unit.test/V750/4.mp4", NULL, 3004},
+    {"http://unit.test/V750/5.mp4", NULL, 3005},
+    {"http://unit.test/V750/6.mp4", NULL, 3006},
+    {NULL, NULL, 0},
+  };
+  const gchar *expectedRequests[] = {
+    "http://unit.test/V300/init.mp4",
+    "http://unit.test/V300/3.mp4",
+    "http://unit.test/V450/init.mp4",
+    "http://unit.test/V450/4.mp4",
+    "http://unit.test/V750/init.mp4",
+    "http://unit.test/V750/5.mp4",
+    "http://unit.test/V300/init.mp4",
+    "http://unit.test/V300/6.mp4",
+    NULL
+  };
+  GstAdaptiveDemuxTestExpectedOutput outputTestData[] = {
+    {"video_00", 100 + 1003 + 200 + 2004 + 300 + 3005 + 100 + 1006, NULL},
+  };
+  GstTestHTTPSrcCallbacks http_src_callbacks = { 0 };
+  GstTestHTTPSrcTestData http_src_test_data = { 0 };
+  GstAdaptiveDemuxTestCallbacks test_callbacks = { 0 };
+  GstDashDemuxTestCase *testData;
+  GstClock *clock;
+  const GValue *requests;
+
+  clock = gst_test_clock_new_with_start_time (GST_SECOND * 3600);
+  gst_system_clock_set_default (clock);
+
+  availabilityStartTime = timeFromNow (-6);
+  availabilityStartTimeString = toXSDateTime (availabilityStartTime);
+  mpd = g_strdup_printf (mpd_fmt, availabilityStartTimeString);
+  g_free (availabilityStartTimeString);
+  inputTestData[0].payload = (guint8 *) mpd;
+
+  http_src_callbacks.src_start = gst_dashdemux_http_src_start;
+  http_src_callbacks.src_create = gst_dashdemux_http_src_create;
+  http_src_test_data.input = inputTestData;
+  http_src_test_data.data = gst_structure_new_empty (__FUNCTION__);
+  gst_test_http_src_install_callbacks (&http_src_callbacks,
+      &http_src_test_data);
+
+  test_callbacks.pre_test = connect_abr_signals;
+  test_callbacks.appsink_received_data =
+      testLiveStreamManifestRefreshCheckDataReceived;
+  test_callbacks.appsink_eos = gst_adaptive_demux_test_unexpected_eos;
+
+  testData = gst_dash_demux_test_case_new ();
+  COPY_OUTPUT_TEST_DATA (outputTestData, testData);
+  testData->availabilityStartTime = availabilityStartTime;
+  testData->clockCompensation = 0;
+
+  gst_adaptive_demux_test_run (DEMUX_ELEMENT_NAME, "http://unit.test/test.mpd",
+      &test_callbacks, testData);
+
+  requests = gst_structure_get_value (http_src_test_data.data, "requests");
+  fail_unless (requests != NULL);
+  /*  assert_equals_uint64 (gst_value_array_get_size (requests),
+     sizeof (inputTestData) / sizeof (inputTestData[0]) - 1); */
+  for (guint i = 0, j = 0; i < gst_value_array_get_size (requests); ++i) {
+    const GValue *uri_val;
+    const gchar *uri;
+    fail_if (expectedRequests[j] == NULL);
+    uri_val = gst_value_array_get_value (requests, i);
+    fail_unless (uri_val != NULL);
+    uri = g_value_get_string (uri_val);
+    GST_DEBUG ("HTTP request %u was for URL %s\n", i + 1, uri);
+    if (g_str_has_suffix (uri, ".mpd")) {
+      /* for this test, we don't care about manifest requests */
+      continue;
+    }
+    assert_equals_string (expectedRequests[j], uri);
+    ++j;
+  }
+  g_object_unref (testData);
+  gst_structure_free (http_src_test_data.data);
+  g_free (mpd);
+  gst_system_clock_set_default (NULL);
+  gst_object_unref (clock);
+}
+
+GST_END_TEST;
+
 static Suite *
 dash_demux_suite (void)
 {
@@ -3499,6 +3743,7 @@ dash_demux_suite (void)
   tcase_add_test (tc_liveTests, testClockCompensationHttpHead);
   tcase_add_test (tc_liveTests, testClockCompensationHttpNtp);
   tcase_add_test (tc_liveTests, testClockCompensationMethodChange);
+  tcase_add_test (tc_liveTests, testBitrateSwitchingDuringManifestRefresh);
 
   tcase_add_unchecked_fixture (tc_basicTests, gst_adaptive_demux_test_setup,
       gst_adaptive_demux_test_teardown);
