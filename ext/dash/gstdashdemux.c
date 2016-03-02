@@ -1502,12 +1502,24 @@ gst_dash_demux_update_manifest_data (GstAdaptiveDemux * demux,
         iter && streams_iter;
         iter = g_list_next (iter), streams_iter = g_list_next (streams_iter)) {
       GstDashDemuxStream *demux_stream = iter->data;
+      GstActiveStream *old_stream = demux_stream->active_stream;
       GstActiveStream *new_stream = streams_iter->data;
       GstClockTime ts;
+      GList *rep_list;
+      GstRepresentationNode *rep_node;
+      gint representation_idx;
 
       if (!new_stream) {
         GST_DEBUG_OBJECT (demux,
             "Stream of index %d is missing from manifest update",
+            demux_stream->index);
+        gst_mpd_client_free (new_client);
+        gst_buffer_unmap (buffer, &mapinfo);
+        return GST_FLOW_EOS;
+      }
+      if (!new_stream->cur_adapt_set) {
+        GST_DEBUG_OBJECT (demux,
+            "Stream of index %d is missing adaptation sets from manifest update",
             demux_stream->index);
         gst_mpd_client_free (new_client);
         gst_buffer_unmap (buffer, &mapinfo);
@@ -1533,6 +1545,32 @@ gst_dash_demux_update_manifest_data (GstAdaptiveDemux * demux,
         gst_mpd_client_stream_seek (new_client, new_stream,
             demux->segment.rate >= 0, 0, ts, NULL);
       }
+
+      /* Copy the currently selected Representation from the old stream
+         to the new. As the Representation list might have changed, we
+         can't just copy the representation_idx from old_stream to
+         new_stream */
+      rep_list = new_stream->cur_adapt_set->Representations;
+      representation_idx =
+          gst_mpdparser_get_rep_idx_with_max_bandwidth (rep_list,
+          old_stream->cur_representation->bandwidth);
+      rep_node = g_list_nth_data (rep_list, representation_idx);
+      gst_mpd_client_setup_representation (new_client, new_stream, rep_node);
+      if (representation_idx != old_stream->representation_idx ||
+          old_stream->cur_representation->bandwidth !=
+          new_stream->cur_representation->bandwidth) {
+        /* If the Representation list has changed during the manifest
+           refresh, assume that the previously downloaded init segment
+           might no longer be valid for this new manifest */
+        GST_ADAPTIVE_DEMUX_STREAM_CAST (demux_stream)->need_header = TRUE;
+      }
+
+      GST_LOG_OBJECT (dashdemux, "Old active stream: bw=%u idx=%d",
+          old_stream->cur_representation->bandwidth,
+          old_stream->representation_idx);
+      GST_LOG_OBJECT (dashdemux, "New active stream: bw=%u idx=%d",
+          new_stream->cur_representation->bandwidth,
+          new_stream->representation_idx);
 
       demux_stream->active_stream = new_stream;
     }
